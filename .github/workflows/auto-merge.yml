@@ -33,5 +33,10 @@ jobs:
         run: |
           if ! gh pr merge --auto --squash "$PR_URL"; then
             echo "::warning title=Auto-merge::The release token could not enable auto-merge, so the default token was used. Its merge will not start the Release workflow."
+            # Say what the release token can actually do here, so a wrong token is easy to fix.
+            echo "--- what the release token can see on $GITHUB_REPOSITORY ---"
+            gh api "repos/$GITHUB_REPOSITORY" --jq '"repository visible: yes; token permissions: \(.permissions)"' \
+              || echo "The release token cannot read this repository at all: give it access to it (fine-grained tokens are limited to the repositories chosen when they were created)."
+            echo "-----------------------------------------------------------"
             GH_TOKEN="$FALLBACK_TOKEN" gh pr merge --auto --squash "$PR_URL"
           fi
