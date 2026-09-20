@@ -178,14 +178,14 @@ TypeSafe's API does not allow browser requests from other origins (it answers a 
 
 ## Contributing and releases
 
-- **Branches:** work on a branch, open a pull request into **`dev`**. `main` only ever receives `dev`.
-- **Pull requests into `dev`** must pass CI (tests, plus a build and smoke test on Linux, Windows and macOS) and have a
+- **Branches:** work on a branch, open a pull request into **`develop`**. `master` only ever receives `develop`.
+- **Pull requests into `develop`** must pass CI (tests, plus a build and smoke test on Linux, Windows and macOS) and have a
   [Conventional Commit](https://www.conventionalcommits.org/) title (`feat: …`, `fix(ui): …`, `chore: …`). They are then
   **squash-merged automatically** and the branch is deleted. The PR title becomes the commit message.
-- **`dev` into `main`** is a normal pull request (merge commit), and a check refuses any other source branch. Nothing
-  can be pushed to `main` or `dev` directly.
+- **`develop` into `master`** is a normal pull request (merge commit), and a check refuses any other source branch. Nothing
+  can be pushed to `master` or `develop` directly.
 - **Releases:** [release-please](https://github.com/googleapis/release-please) keeps a "release" pull request open on
-  `dev`, with the next version and changelog worked out from the commit titles (`feat` = minor, `fix` = patch, `!` or
+  `develop`, with the next version and changelog worked out from the commit titles (`feat` = minor, `fix` = patch, `!` or
   `BREAKING CHANGE` = major; below 1.0 breaking changes bump the minor). Merging it tags the release and builds the
   Windows, macOS (Apple silicon and Intel) and Linux (x64 and arm64) downloads onto it. It authenticates with the
   `RELEASE_PLEASE_TOKEN` repository secret, a token allowed to write contents and pull requests, so that CI runs on the

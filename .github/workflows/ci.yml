@@ -2,10 +2,10 @@ name: CI
 
 on:
   pull_request:
-    branches: [dev, main]
+    branches: [develop, master]
     types: [opened, reopened, synchronize, edited]
   push:
-    branches: [dev]
+    branches: [develop]
 
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}
@@ -17,9 +17,9 @@ permissions:
 jobs:
   pr-title:
     name: PR title
-    # A PR into dev is squash-merged with its title as the commit message, and release-please reads that message to
-    # pick the next version. So the title must be a Conventional Commit. (dev -> main uses a merge commit; no check.)
-    if: github.event_name == 'pull_request' && github.base_ref == 'dev'
+    # A PR into develop is squash-merged with its title as the commit message, and release-please reads that message to
+    # pick the next version. So the title must be a Conventional Commit. (develop -> master uses a merge commit; no check.)
+    if: github.event_name == 'pull_request' && github.base_ref == 'develop'
     runs-on: ubuntu-latest
     steps:
       - name: Check the title is a Conventional Commit
