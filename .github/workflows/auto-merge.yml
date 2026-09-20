@@ -1,0 +1,29 @@
+name: Auto-merge into dev
+
+# Turns on GitHub's auto-merge for every pull request into dev: once the required checks pass, it is squash-merged
+# (one Conventional Commit per PR) and its branch is deleted. Release PRs are left for a person to merge, because
+# merging one is what cuts a release.
+
+on:
+  pull_request:
+    branches: [dev]
+    types: [opened, reopened, ready_for_review]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  enable:
+    name: Enable auto-merge
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      !github.event.pull_request.draft &&
+      !startsWith(github.event.pull_request.head.ref, 'release-please--')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Squash-merge when checks pass
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: gh pr merge --auto --squash "$PR_URL"

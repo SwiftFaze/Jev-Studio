@@ -1,0 +1,28 @@
+name: Main guard
+
+# main only ever receives dev. The branch rules on main require this check, so a pull request from any other branch
+# (or from a fork) cannot be merged into it.
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, synchronize, edited]
+
+permissions:
+  contents: read
+
+jobs:
+  only-dev:
+    name: Only dev can merge into main
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check the source branch
+        env:
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        run: |
+          if [ "$HEAD_REPO" != "$GITHUB_REPOSITORY" ] || [ "$HEAD_REF" != "dev" ]; then
+            echo "::error title=Only dev can merge into main::This pull request is from '$HEAD_REPO:$HEAD_REF'. Open it against dev instead."
+            exit 1
+          fi
+          echo "OK: dev -> main"
