@@ -7,7 +7,7 @@ name: Auto-merge into develop
 on:
   pull_request:
     branches: [develop]
-    types: [opened, reopened, ready_for_review]
+    types: [opened, reopened, synchronize, ready_for_review]
 
 permissions:
   contents: write
@@ -24,7 +24,6 @@ jobs:
     steps:
       - name: Squash-merge when checks pass
         env:
-          # The release token when there is one: a merge made with the default token does not start the Release workflow.
-          GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_URL: ${{ github.event.pull_request.html_url }}
         run: gh pr merge --auto --squash "$PR_URL"
