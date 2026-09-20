@@ -1,0 +1,4 @@
+# Keep line endings as LF in the repo on every OS (Windows checkouts would otherwise warn on every commit).
+* text=auto eol=lf
+*.png binary
+*.ico binary
