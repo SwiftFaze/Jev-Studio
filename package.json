@@ -1,0 +1,21 @@
+{
+  "name": "jev-studio",
+  "version": "0.1.0",
+  "description": "A friendly local UI for asking Jev (TypeSafe System One) structured questions.",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.9"
+  },
+  "scripts": {
+    "start": "node src/cli.js",
+    "dev": "node --watch src/cli.js",
+    "mock": "node src/cli.js --mock",
+    "test": "node --test",
+    "build": "node scripts/build.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2",
+    "postject": "^1.0.0-alpha.6"
+  }
+}

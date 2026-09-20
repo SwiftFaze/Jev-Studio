@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Jev Studio</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/styles.css">
+  <script type="module" src="/app.js"></script>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar" id="sidebar" aria-label="Menu">
+      <nav id="mode-nav" aria-label="Pages">
+        <div class="nav-group">
+          <div class="nav-label">Ask</div>
+          <button type="button" class="nav-item" data-mode="custom" aria-pressed="true">Single</button>
+          <button type="button" class="nav-item" data-mode="yesno" aria-pressed="false">Yes / No</button>
+          <button type="button" class="nav-item" data-mode="score" aria-pressed="false">Score</button>
+          <button type="button" class="nav-item" data-mode="choice" aria-pressed="false">Choice</button>
+        </div>
+        <div class="nav-group">
+          <div class="nav-label">Many at once</div>
+          <button type="button" class="nav-item" data-mode="batch" aria-pressed="false">Batch</button>
+          <button type="button" class="nav-item" data-mode="rank" aria-pressed="false">Rank</button>
+          <button type="button" class="nav-item" data-mode="compare" aria-pressed="false">Compare</button>
+        </div>
+        <div class="nav-group">
+          <button type="button" class="nav-item nav-toggle" id="sets-toggle" aria-expanded="true" aria-controls="sets-menu">
+            <span>Question sets</span><span class="nav-chevron" aria-hidden="true"></span>
+          </button>
+          <ul class="nav-sub" id="sets-menu"></ul>
+          <button type="button" class="nav-item nav-manage" id="sets-btn">Manage sets…</button>
+        </div>
+      </nav>
+
+      <div class="sidebar-foot">
+        <label class="sr-only" for="template">Load an example</label>
+        <select id="template"></select>
+        <button type="button" id="history-btn" class="nav-item">History</button>
+        <button type="button" id="key-btn" class="nav-item">API key…</button>
+        <div class="foot-pills">
+          <span id="token-chip" class="pill" title="Tokens used by requests from this tab">0 tokens</span>
+          <span id="status-pill" class="pill" role="status">Checking…</span>
+        </div>
+      </div>
+    </aside>
+
+    <div class="main">
+      <header class="mainbar">
+        <button type="button" id="menu-btn" class="btn btn-sm menu-btn" aria-controls="sidebar" aria-expanded="false">☰ Menu</button>
+        <div class="title">
+          <span class="logo" aria-hidden="true">J</span>
+          <h1>Jev Studio</h1>
+        </div>
+        <button type="button" id="new-query" class="btn btn-sm" title="Start over: clears the input, the questions and the answers">New query</button>
+      </header>
+
+      <div id="banner" class="banner" hidden></div>
+
+      <main class="layout" id="layout">
+        <section class="col" aria-label="Input and questions">
+          <div id="mode-custom" class="mode"></div>
+          <div id="mode-yesno" class="mode" hidden></div>
+          <div id="mode-score" class="mode" hidden></div>
+          <div id="mode-choice" class="mode" hidden></div>
+          <div id="mode-set" class="mode" hidden></div>
+          <div id="mode-batch" class="mode" hidden></div>
+          <div id="mode-rank" class="mode" hidden></div>
+          <div id="mode-compare" class="mode" hidden></div>
+
+          <div id="builder-panel" class="panel">
+            <div class="panel-head"><h2 id="builder-title">1. What do you want to know?</h2></div>
+            <p class="hint" id="builder-hint">Each question is one narrow judgment. Jev answers all of them in a single call.</p>
+            <div id="questions" class="questions"></div>
+            <button type="button" id="add-question" class="btn btn-ghost">+ Add question</button>
+          </div>
+        </section>
+
+        <section class="col col-results" aria-label="Results">
+          <div id="pane-custom" class="panel">
+            <div class="panel-head"><h2>3. Answers</h2></div>
+            <div id="custom-results" aria-live="polite"></div>
+          </div>
+          <div id="pane-yesno" class="panel" hidden>
+            <div class="panel-head"><h2>3. Answers</h2></div>
+            <div id="yesno-results" aria-live="polite"></div>
+          </div>
+          <div id="pane-score" class="panel" hidden>
+            <div class="panel-head"><h2>3. Answers</h2></div>
+            <div id="score-results" aria-live="polite"></div>
+          </div>
+          <div id="pane-choice" class="panel" hidden>
+            <div class="panel-head"><h2>3. Answers</h2></div>
+            <div id="choice-results" aria-live="polite"></div>
+          </div>
+          <div id="pane-set" class="panel" hidden>
+            <div class="panel-head"><h2>Answers</h2></div>
+            <div id="set-results" aria-live="polite"></div>
+          </div>
+          <div id="pane-batch" class="panel" hidden>
+            <div class="panel-head"><h2>3. Batch results</h2></div>
+            <div id="batch-results"></div>
+          </div>
+          <div id="pane-rank" class="panel" hidden>
+            <div class="panel-head"><h2>2. Ranked candidates</h2></div>
+            <div id="rank-results"></div>
+          </div>
+          <div id="pane-compare" class="panel" hidden>
+            <div class="panel-head"><h2>Differences</h2></div>
+            <div id="compare-results"></div>
+          </div>
+        </section>
+      </main>
+
+      <!-- The run controls sit at the bottom edge of the window: below short pages, and pinned over long ones. -->
+      <div class="dock" id="dock">
+        <div class="dock-inner">
+          <div id="runbar-custom" class="runbar"></div>
+          <div id="runbar-yesno" class="runbar" hidden></div>
+          <div id="runbar-score" class="runbar" hidden></div>
+          <div id="runbar-choice" class="runbar" hidden></div>
+          <div id="runbar-set" class="runbar" hidden></div>
+          <div id="runbar-batch" class="runbar" hidden></div>
+          <div id="runbar-rank" class="runbar" hidden></div>
+          <span id="dock-flash" class="dock-flash" role="status"></span>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="scrim" id="scrim"></div>
+
+  <dialog id="history-dialog">
+    <div class="dialog-head">
+      <h2>History</h2>
+      <form method="dialog"><button class="btn btn-ghost btn-sm">Close</button></form>
+    </div>
+    <p class="hint">Runs from the question pages, stored in this browser only. Click one to restore its input and answers.</p>
+    <input id="history-search" class="text" type="search" placeholder="Search input text or question ids" aria-label="Search history">
+    <div id="history-list" class="history-list"></div>
+    <button type="button" id="history-clear" class="btn btn-ghost btn-sm">Clear history</button>
+  </dialog>
+
+  <dialog id="save-dialog">
+    <div class="dialog-head">
+      <h2>Save question set</h2>
+      <form method="dialog"><button class="btn btn-ghost btn-sm">Close</button></form>
+    </div>
+    <div id="save-body"></div>
+  </dialog>
+
+  <dialog id="key-dialog">
+    <div class="dialog-head">
+      <h2>API key</h2>
+      <form method="dialog"><button class="btn btn-ghost btn-sm">Close</button></form>
+    </div>
+    <div id="key-body"></div>
+  </dialog>
+
+  <dialog id="sets-dialog">
+    <div class="dialog-head">
+      <h2>Question sets</h2>
+      <form method="dialog"><button class="btn btn-ghost btn-sm">Close</button></form>
+    </div>
+    <div id="sets-body"></div>
+  </dialog>
+
+  <dialog id="csv-dialog">
+    <div class="dialog-head">
+      <h2>Import CSV</h2>
+      <form method="dialog"><button class="btn btn-ghost btn-sm">Close</button></form>
+    </div>
+    <div id="csv-body"></div>
+  </dialog>
+</body>
+</html>

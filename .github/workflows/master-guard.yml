@@ -1,0 +1,28 @@
+name: Master guard
+
+# master only ever receives develop. The branch rules on master require this check, so a pull request from any other branch
+# (or from a fork) cannot be merged into it.
+
+on:
+  pull_request:
+    branches: [master]
+    types: [opened, reopened, synchronize, edited]
+
+permissions:
+  contents: read
+
+jobs:
+  only-develop:
+    name: Only develop can merge into master
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check the source branch
+        env:
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        run: |
+          if [ "$HEAD_REPO" != "$GITHUB_REPOSITORY" ] || [ "$HEAD_REF" != "develop" ]; then
+            echo "::error title=Only develop can merge into master::This pull request is from '$HEAD_REPO:$HEAD_REF'. Open it against develop instead."
+            exit 1
+          fi
+          echo "OK: develop -> master"
