@@ -187,9 +187,22 @@ TypeSafe's API does not allow browser requests from other origins (it answers a 
 - **Releases:** [release-please](https://github.com/googleapis/release-please) keeps a "release" pull request open on
   `develop`, with the next version and changelog worked out from the commit titles (`feat` = minor, `fix` = patch, `!` or
   `BREAKING CHANGE` = major; below 1.0 breaking changes bump the minor). Merging it tags the release and builds the
-  Windows, macOS (Apple silicon and Intel) and Linux (x64 and arm64) downloads onto it. It authenticates with the
-  `RELEASE_PLEASE_TOKEN` repository secret, a token allowed to write contents and pull requests, so that CI runs on the
-  release PR.
+  Windows, macOS (Apple silicon and Intel) and Linux (x64 and arm64) downloads onto it.
+
+### The release token
+
+Merges and release PRs made with GitHub's built-in token do not start other workflows (a GitHub rule), so CI and the
+release build would never run on them. Two workflows therefore use a personal access token stored as the repository
+secret `RELEASE_PLEASE_TOKEN`: auto-merge (so the merge into `develop` starts the Release workflow) and release-please
+(so CI runs on its release PR).
+
+1. Create a **fine-grained** token (GitHub, Settings, Developer settings): repository access **Only select
+   repositories** with this repo chosen, and permissions **Contents: read and write**, **Pull requests: read and write**
+   (Metadata: read is added for you). A classic token with the `repo` scope also works.
+2. Store it from a normal terminal, where it prompts for the value: `gh secret set RELEASE_PLEASE_TOKEN --repo SwiftFaze/Jev-Studio`
+   (or Settings, Secrets and variables, Actions). Running that through a tool without a terminal can save an empty value.
+3. If it is missing or too weak, PRs still auto-merge (with the built-in token) but nothing runs after the merge; the
+   auto-merge job then prints what the token can see, to show what to fix.
 
 ## Reading the numbers
 
