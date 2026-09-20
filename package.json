@@ -1,6 +1,6 @@
 {
   "name": "jev-studio",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "A friendly local UI for asking Jev (TypeSafe System One) structured questions.",
   "private": true,
   "type": "module",
