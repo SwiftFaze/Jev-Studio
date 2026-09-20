@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { DEFAULT_MODEL, validateRequest } from './validate.js';
 import { callSystemOne } from './typesafe.js';
 import { mockResponse } from './mock.js';
+import { fetchSteamReviews, SteamError, validateSteamRequest } from './steam.js';
 import { diskAssets, isPackaged, packagedAssets } from './assets.js';
 import { checkKey, maskKey } from '../public/lib/apikey.js';
 
@@ -147,6 +148,33 @@ export function createApp({
     }
   }
 
+  /**
+   * Steam's review API cannot be called from the page (the Content-Security-Policy only allows this origin), so the page
+   * asks here. It needs no key, and it works in mock mode too: only the Jev answers are mocked, not the reviews.
+   */
+  async function steamReviews(req, res) {
+    if (!requireJson(req)) return sendJson(res, 415, { error: 'Content-Type must be application/json.' });
+
+    let body;
+    try {
+      body = await readJson(req);
+    } catch (err) {
+      return sendJson(res, err.status ?? 400, { error: err.message });
+    }
+
+    const checked = validateSteamRequest(body);
+    if (!checked.ok) return sendJson(res, 422, { error: 'Invalid request', details: checked.errors });
+
+    try {
+      const { summary, reviews, cursor, done } = await fetchSteamReviews(checked.value, { fetchImpl });
+      const { appId, name } = checked.value;
+      return sendJson(res, 200, { appId, name, summary, reviews, cursor, done });
+    } catch (err) {
+      if (err instanceof SteamError) return sendJson(res, err.status, { error: err.message });
+      return sendJson(res, 502, { error: `Could not read Steam reviews: ${err.message}` });
+    }
+  }
+
   /** PUT saves (encrypts) the key from the request body, DELETE forgets it. Both answer with the new status. */
   async function manageKey(req, res) {
     if (!keyStore) return sendJson(res, 501, { error: 'This build cannot store an API key.' });
@@ -209,6 +237,10 @@ export function createApp({
     if (pathname === '/api/run') {
       if (req.method !== 'POST') return sendJson(res, 405, { error: 'Method not allowed.' });
       return run(req, res);
+    }
+    if (pathname === '/api/steam/reviews') {
+      if (req.method !== 'POST') return sendJson(res, 405, { error: 'Method not allowed.' });
+      return steamReviews(req, res);
     }
     if (pathname === '/api/key') {
       if (req.method !== 'PUT' && req.method !== 'DELETE') return sendJson(res, 405, { error: 'Method not allowed.' });

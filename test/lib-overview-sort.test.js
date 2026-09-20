@@ -171,3 +171,17 @@ test('a Yes / No answer of 95% is exactly 90% certain, so it clears a 90% line (
   assert.equal(certainty(noul(1)), 1);
   assert.equal(certainty(noul(0.6)), 0.2);
 });
+
+test('runProgress: finished rows are answered plus failed, and the share and tokens follow', async () => {
+  const { runProgress } = await import('../public/lib/overview.js');
+  const usage = { input_tokens: 90, output_tokens: 10 };
+  const p = runProgress([
+    { status: 'ok', response: { usage } },
+    { status: 'ok', response: { usage } },
+    { status: 'error' },
+    { status: 'running' },
+    { status: 'pending' },
+  ]);
+  assert.deepEqual(p, { total: 5, ok: 2, failed: 1, done: 3, notRun: 2, share: 0.6, tokens: 200 });
+  assert.deepEqual(runProgress([]), { total: 0, ok: 0, failed: 0, done: 0, notRun: 0, share: 0, tokens: 0 });
+});

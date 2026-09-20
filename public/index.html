@@ -26,6 +26,11 @@
           <button type="button" class="nav-item" data-mode="compare" aria-pressed="false">Compare</button>
         </div>
         <div class="nav-group">
+          <div class="nav-label">Tools</div>
+          <button type="button" class="nav-item" data-mode="steam" aria-pressed="false">Steam reviews</button>
+          <ul class="nav-sub" id="steam-saved-menu" aria-label="Saved Steam analyses" hidden></ul>
+        </div>
+        <div class="nav-group">
           <button type="button" class="nav-item nav-toggle" id="sets-toggle" aria-expanded="true" aria-controls="sets-menu">
             <span>Question sets</span><span class="nav-chevron" aria-hidden="true"></span>
           </button>
@@ -67,6 +72,8 @@
           <div id="mode-set" class="mode" hidden></div>
           <div id="mode-batch" class="mode" hidden></div>
           <div id="mode-rank" class="mode" hidden></div>
+          <div id="mode-steam" class="mode" hidden></div>
+          <div id="mode-steamsaved" class="mode" hidden></div>
           <div id="mode-compare" class="mode" hidden></div>
 
           <div id="builder-panel" class="panel">
@@ -106,6 +113,34 @@
             <div class="panel-head"><h2>2. Ranked candidates</h2></div>
             <div id="rank-results"></div>
           </div>
+          <!-- Two sections, so the group itself has no box: what reviewers say (the answer), then the reviews behind it. -->
+          <div id="pane-steam" class="pane-group" hidden>
+            <div class="panel">
+              <div class="panel-head"><h2>2. What reviewers say</h2></div>
+              <div id="steam-verdict" aria-live="polite"></div>
+            </div>
+            <!-- Open by default: the overview lives here. Folded, the header still shows how far the batch has got. -->
+            <details class="panel panel-fold" id="steam-batch-card" open>
+              <summary class="panel-head"><h2>3. This batch</h2><span class="panel-headline" id="steam-batch-headline"></span></summary>
+              <div id="steam-results"></div>
+            </details>
+            <!-- The table is a card of its own, closed until you want it: it can be hundreds of rows, a page at a time. -->
+            <details class="panel panel-fold" id="steam-table-card">
+              <summary class="panel-head"><h2>4. The reviews in this batch</h2><span class="panel-headline" id="steam-table-headline"></span></summary>
+              <div id="steam-table"></div>
+            </details>
+          </div>
+          <!-- A saved analysis: what reviewers said, then the table of the batch it was saved with. -->
+          <div id="pane-steamsaved" class="pane-group" hidden>
+            <div class="panel">
+              <div class="panel-head"><h2>What reviewers said</h2></div>
+              <div id="steamsaved-verdict"></div>
+            </div>
+            <details class="panel panel-fold" id="steamsaved-table-card" open>
+              <summary class="panel-head"><h2>The reviews in the saved batch</h2><span class="panel-headline" id="steamsaved-table-headline"></span></summary>
+              <div id="steamsaved-table"></div>
+            </details>
+          </div>
           <div id="pane-compare" class="panel" hidden>
             <div class="panel-head"><h2>Differences</h2></div>
             <div id="compare-results"></div>
@@ -123,6 +158,8 @@
           <div id="runbar-set" class="runbar" hidden></div>
           <div id="runbar-batch" class="runbar" hidden></div>
           <div id="runbar-rank" class="runbar" hidden></div>
+          <div id="runbar-steam" class="runbar" hidden></div>
+          <div id="runbar-steamsaved" class="runbar" hidden></div>
           <span id="dock-flash" class="dock-flash" role="status"></span>
         </div>
       </div>
@@ -163,6 +200,22 @@
       <form method="dialog"><button class="btn btn-ghost btn-sm">Close</button></form>
     </div>
     <div id="sets-body"></div>
+  </dialog>
+
+  <dialog id="steam-save-dialog">
+    <div class="dialog-head">
+      <h2>Save analysis</h2>
+      <form method="dialog"><button class="btn btn-ghost btn-sm">Close</button></form>
+    </div>
+    <div id="steam-save-body"></div>
+  </dialog>
+
+  <dialog id="steam-more-dialog">
+    <div class="dialog-head">
+      <h2>Analyse more reviews</h2>
+      <form method="dialog"><button class="btn btn-ghost btn-sm">Close</button></form>
+    </div>
+    <div id="steam-more-body"></div>
   </dialog>
 
   <dialog id="csv-dialog">

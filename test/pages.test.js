@@ -1,18 +1,19 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { BATCH_EXAMPLES, RANK_EXAMPLES, TEMPLATES, TYPE_EXAMPLES } from '../public/templates.js';
+import { BATCH_EXAMPLES, RANK_EXAMPLES, STEAM_EXAMPLES, TEMPLATES, TYPE_EXAMPLES } from '../public/templates.js';
+import { emptyTally, parseSteamApp } from '../public/lib/steam.js';
 import { applyExpected, MAX_ITEMS, parseItems } from '../public/lib/batch.js';
 import { buildRankState } from '../public/lib/rank.js';
 import { blankDraft, buildRequest, draftFromRequest } from '../public/request.js';
 import { lintQuestion } from '../public/lib/lint.js';
 import { validateRequest } from '../src/validate.js';
-import { app, currentDraft, currentPage, hasQuestionWork, isSetMode, lockedType, MODES, PAGES, PAGE_TYPE, save, setIdOf } from '../public/ui/state.js';
+import { app, currentDraft, currentPage, hasQuestionWork, isSetMode, isSteamSavedMode, lockedType, MODES, PAGES, PAGE_TYPE, save, setIdOf, steamSavedIdOf } from '../public/ui/state.js';
 
 test('there is a page for each question type, and each has examples', () => {
   assert.deepEqual(PAGES, ['custom', 'yesno', 'score', 'choice']);
   assert.deepEqual(PAGE_TYPE, { yesno: 'noul', score: 'score', choice: 'choice' });
   for (const page of Object.keys(PAGE_TYPE)) assert.ok(TYPE_EXAMPLES[page].length >= 2, `${page} has examples`);
-  assert.deepEqual(MODES, ['custom', 'yesno', 'score', 'choice', 'batch', 'rank', 'compare']);
+  assert.deepEqual(MODES, ['custom', 'yesno', 'score', 'choice', 'batch', 'rank', 'steam', 'compare']);
 });
 
 test('every example on a typed page uses only that page\'s type, is valid, and gets no lint warnings', () => {
@@ -206,4 +207,39 @@ test('the first batch example carries expected answers for every item; the secon
   assert.equal(BATCH_EXAMPLES[0].items.length, 14);
   assert.ok(BATCH_EXAMPLES[0].items.every((i) => i.expected && Object.keys(i.expected).length >= 2));
   assert.ok(BATCH_EXAMPLES[1].items.every((i) => !i.expected));
+});
+
+test('steam examples: unique names, and every link is a Steam store link that names its game', () => {
+  assert.ok(STEAM_EXAMPLES.length >= 2);
+  assert.equal(new Set(STEAM_EXAMPLES.map((e) => e.name)).size, STEAM_EXAMPLES.length, 'the menu is keyed by index, so duplicates would confuse people');
+  for (const example of STEAM_EXAMPLES) {
+    const game = parseSteamApp(example.url);
+    assert.ok(game, example.name);
+    assert.ok(game.name, `${example.name}: the link carries the game's name`);
+  }
+  assert.equal(parseSteamApp(STEAM_EXAMPLES[0].url).appId, '548430');
+});
+
+test('the Steam page saves like the others, and starts with nothing read, at the start of the reviews', () => {
+  assert.doesNotThrow(() => save.steam());
+  const s = app.steam;
+  assert.equal(s.url, '');
+  assert.deepEqual([s.count, s.sort], [100, 'recent'], 'the batch size and the sort');
+  assert.equal('language' in s, false, 'reviews are always read in every language, so there is nothing to choose');
+  assert.deepEqual([s.batches, s.cursor, s.exhausted, s.key, s.run], [0, '*', false, null, null]);
+  assert.deepEqual(s.tally, emptyTally());
+  assert.equal(s.batchOpen, true, 'the batch card starts open, because the overview is in it');
+  assert.equal(s.tableOpen, false, 'the table starts closed');
+  assert.equal('reviews' in s, false, 'loaded reviews are not kept as a list: only the batch on screen and counts for the rest');
+});
+
+test('a saved Steam analysis is a page of its own, addressed as steamsaved:<id>, and starts with none saved', () => {
+  assert.equal(isSteamSavedMode('steamsaved:a1b2'), true);
+  assert.equal(steamSavedIdOf('steamsaved:a1b2'), 'a1b2');
+  for (const notSaved of ['steam', 'set:x', 'custom', '', undefined, null]) assert.equal(isSteamSavedMode(notSaved), false, String(notSaved));
+  assert.equal(isSetMode('steamsaved:a1b2'), false, 'and it is not a question set');
+  assert.equal(MODES.some(isSteamSavedMode), false, 'saved pages are dynamic, never part of the fixed list');
+  assert.deepEqual(app.steamSaved, []);
+  assert.equal(app.steam.savedId, null);
+  assert.equal(save.steamSaved(), false, 'saving reports false when there is no browser storage, rather than throwing');
 });

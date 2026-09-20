@@ -486,3 +486,89 @@ dialog[open] { display: flex; flex-direction: column; gap: 10px; }
 #layout[data-kind="set"] .mode > .panel textarea { flex: 1 1 auto; min-height: 260px; }
 .set-description { color: var(--text); font-size: 15px; }
 .set-desc { color: var(--muted); }
+
+/* ===== Steam reviews ===== */
+/* The results column is two sections with no box of their own; they sort after the input like every other results panel. */
+.pane-group { display: contents; }
+#steam-verdict, #steam-results { display: flex; flex-direction: column; gap: 10px; }
+#layout[data-kind="bulk"] .pane-group > .panel { order: 3; }
+#layout[data-kind="compare"] .pane-group > .panel { order: 2; } /* a saved analysis uses the compare layout */
+
+/* What reviewers say: green when the topic is good for the game, amber when mixed, red when bad, dashed grey with too little data. */
+.steam-share { display: flex; align-items: baseline; gap: 8px; }
+.steam-share-value { font-size: 28px; line-height: 1; font-variant-numeric: tabular-nums; }
+.ov-card.tone-good { border-color: var(--good); background: var(--good-soft); }
+.ov-card.tone-mixed { border-color: var(--warn); background: var(--warn-soft); }
+.ov-card.tone-bad { border-color: var(--bad); background: var(--bad-soft); }
+.ov-card.tone-none { border-style: dashed; }
+.tone-good .steam-share-value { color: var(--good); }
+.tone-mixed .steam-share-value { color: var(--warn); }
+.tone-bad .steam-share-value { color: var(--bad); }
+.tone-none .steam-share-value { color: var(--muted); }
+.tone-good .bar-fill { background: var(--good); opacity: 1; }
+.tone-mixed .bar-fill { background: var(--warn); opacity: 1; }
+.tone-bad .bar-fill { background: var(--bad); opacity: 1; }
+
+/* The cards are grouped under headings. A group with nothing to show is not drawn at all. */
+.steam-group { display: flex; flex-direction: column; gap: 8px; }
+.steam-group + .steam-group { margin-top: 6px; }
+.steam-group-title { font-size: 13px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
+
+/* Performance by platform: a row for each platform reviewers name, coloured by how well it runs there. */
+.steam-platform { display: grid; grid-template-columns: minmax(110px, 30%) 1fr minmax(120px, 34%); align-items: center; gap: 8px; }
+.steam-platform-name { font-size: 13px; overflow-wrap: anywhere; }
+.steam-platform-value { text-align: right; font-variant-numeric: tabular-nums; }
+.steam-platform.tone-good .bar-fill { background: var(--good); opacity: 1; }
+.steam-platform.tone-mixed .bar-fill { background: var(--warn); opacity: 1; }
+.steam-platform.tone-bad .bar-fill { background: var(--bad); opacity: 1; }
+@media (max-width: 560px) { .steam-platform { grid-template-columns: 1fr auto; } .steam-platform .bar { grid-column: 1 / -1; grid-row: 2; } }
+
+/* Progress: big enough to read from across the room, on the page and in the bottom bar. */
+.bulk-progress { gap: 6px; }
+/* The bar's `flex: 1` is for a row; in this column it made the bar 0px tall, so it never showed. */
+.bulk-progress .bar { flex: 0 0 auto; }
+.progress-main { font-size: 18px; line-height: 1.2; font-variant-numeric: tabular-nums; }
+.bar-big { height: 16px; }
+.bar-fill.is-done { background: var(--good); opacity: 1; }
+/* The run controls take the whole row, so the bar can sit right of Stop and stretch to the edge. */
+#runbar-steam { flex: 1 1 0; min-width: 0; }
+.dock-progress { display: flex; align-items: center; gap: 10px; flex: 1 1 240px; min-width: 200px; }
+.dock-progress-label { font-size: 15px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+
+/* A card whose header opens and closes it (the table), with the same cue as the collapsed panels. */
+.panel-fold > summary { cursor: pointer; list-style: none; display: flex; align-items: baseline; justify-content: flex-start; gap: 10px; }
+.panel-fold > summary::-webkit-details-marker { display: none; }
+.panel-fold > summary::before { content: "▸"; display: inline-block; width: 1em; color: var(--muted); }
+.panel-fold[open] > summary::before { content: "▾"; }
+.panel-fold[open] > summary { margin-bottom: 12px; }
+#steam-table { display: flex; flex-direction: column; gap: 10px; }
+
+/* Paging for the reviews table: one pager beside the sort controls, one under the table. */
+.pager { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-left: auto; }
+.pager-info { color: var(--muted); font-variant-numeric: tabular-nums; }
+.bulk-panel > .pager { margin: 0; justify-content: center; }
+
+/* The "Analyse more…" popup: a slider for how much of the game, and what it will cost. */
+#steam-more-body { display: flex; flex-direction: column; gap: 12px; min-width: min(460px, 78vw); }
+.steam-more-pick { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.steam-more-pick input[type="range"] { flex: 1 1 220px; accent-color: var(--accent); }
+.steam-more-share { font-size: 18px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.steam-more-presets { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; color: var(--muted); font-size: 13px; }
+.steam-more-sums { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; }
+.steam-more-actions { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+
+/* A count on a summary card that can be clicked to see the reviews behind it. */
+.steam-pick { font: inherit; padding: 0; border: 0; background: none; color: var(--accent); cursor: pointer; text-decoration: underline dotted; text-underline-offset: 3px; }
+.steam-pick:hover { text-decoration-style: solid; }
+.steam-pick:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+
+/* The bar above the table when it is filtered: what by, how many, and a way back. */
+.filter-chip { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; padding: 8px 12px; border: 1px solid var(--accent); border-radius: 10px; background: var(--accent-soft); font-size: 14px; }
+
+/* A saved Steam analysis: its page has no table, only the results and what to do next. */
+#steamsaved-verdict, #steamsaved-table { display: flex; flex-direction: column; gap: 10px; }
+.steamsaved-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* The menu of answers to show in the table: there are dozens, so it is only as wide as it needs to be. */
+.toolbar-filter { display: inline-flex; align-items: center; gap: 6px; }
+.toolbar-filter select { max-width: 230px; }
