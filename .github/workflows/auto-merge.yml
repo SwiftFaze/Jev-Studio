@@ -24,6 +24,14 @@ jobs:
     steps:
       - name: Squash-merge when checks pass
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # A merge is attributed to whoever's token enabled auto-merge, and a merge by the default token does not start
+          # other workflows: CI and Release would never run on develop. So use the release token, and fall back to the
+          # default token (the PR still merges, but a person must then run the release workflow by hand).
+          GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+          FALLBACK_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_URL: ${{ github.event.pull_request.html_url }}
-        run: gh pr merge --auto --squash "$PR_URL"
+        run: |
+          if ! gh pr merge --auto --squash "$PR_URL"; then
+            echo "::warning title=Auto-merge::The release token could not enable auto-merge, so the default token was used. Its merge will not start the Release workflow."
+            GH_TOKEN="$FALLBACK_TOKEN" gh pr merge --auto --squash "$PR_URL"
+          fi
