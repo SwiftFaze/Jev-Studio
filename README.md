@@ -36,6 +36,7 @@ only appears once there is something to show.
 | **Choice** | Picking one option from a set | Every question is a Choice, with its own examples |
 | **Batch** | Many items, same questions | Its own questions (separate from Single), paste lines or load a CSV, review flags with auto check-off, composite score with weights, accuracy check, CSV export; two examples in the menu |
 | **Rank** | Order candidates for a query | Batch engine with fixed relevance questions and adjustable weights; an example (88 foods ranked by "Could this be used as an effective weapon?") is in the examples menu |
+| **Steam reviews** (under *Tools*) | What players say about a game | Paste a store link; Jev reads its reviews a batch at a time and answers fixed questions about each: positive, worth the price, pay to win, performance, bugs and crashes, lasting appeal |
 | **Compare** | See what changed between two runs | Side-by-side probabilities and deltas, notes when wording or options changed |
 
 - **Question types**, matching the API: **Choice** (pick one option), **Yes / No** (a "noul": probability a statement
@@ -64,6 +65,82 @@ only appears once there is something to show.
 - **API key** is entered in the app once and kept encrypted on your computer (see below).
 - **Mock mode** to explore without an API key.
 - Every page is the same width.
+
+### Steam reviews in detail
+
+It is under **Tools** in the menu. Paste a store link such as `https://store.steampowered.com/app/548430/Deep_Rock_Galactic/`
+(the reviews API link and a bare app id work too). As soon as it is valid the page asks Steam how many reviews the game
+has and shows that and Steam's own rating; this is free and uses no key. Reviews are always read in every language.
+
+- **Every review, a batch at a time.** A popular game has hundreds of thousands of reviews (Deep Rock Galactic has about
+  380,000), which is far more than a browser can hold, so they are never loaded together. **Analyse first batch** reads
+  the first batch from Steam (you choose **50, 100, 200 or 500**, and **most recent** or **most helpful**) and asks Jev
+  about each review; **Analyse next batch** reads the next one, starting exactly where the last stopped. Stopping loses
+  nothing: the next press carries on from the same place, even after closing the tab. Changing the link or the sort
+  starts over, and asks first.
+- **Analyse more…** opens a popup with a **slider for how much of the game to have analysed**, as a percentage of its
+  reviews (in steps of a tenth of a percent for a big game), with jump-to buttons for 1%, 5%, 10%, 25%, 50% and 100%. Under
+  it, live, is what that costs: how many more reviews and requests, roughly how many tokens, and about how long at the
+  speed so far. Nothing is spent until you press its button. It then runs batch after batch until it gets there (the last
+  batch is cut short, so it stops at the chosen share and not past it), and you can press **Stop** at any time.
+- **It costs what it costs.** Jev is asked twenty-four questions about each review, in a separate request per review, and
+  the questions are most of the cost: a first guess is about 3,200 tokens a review, and after the first 20 reviews the
+  page uses what they actually cost. The popup shows the estimate for whatever you pick, and warns above 100 million
+  tokens. All of a 380,000-review game is on the order of a billion tokens, so pick a share and stop when the numbers
+  have settled.
+- **What is kept.** Only the batch on screen keeps its reviews. A finished batch is reduced to counts, which is all the
+  summary needs and is tiny, so there is no limit on how many batches you can read. Results are kept in your browser,
+  not in History.
+- **What Jev is asked** (listed on the page), in groups. *Overall:* positive, worth the price, pay to win. *Gameplay:*
+  difficulty, learning curve, multiplayer and matchmaking, fun with friends, AI quality, controls and UI. *Content and value:* lasting
+  appeal, story and writing, DLC and season passes, microtransactions, AI slop (generative-AI art, voice or writing,
+  as opposed to the AI inside the game), length. *Technical:* performance, bugs and crashes, lost progress,
+  netcode and servers, and which platform the reviewer plays on. *Community and support:* developer responsiveness,
+  community, customer support. *Compared with others:* against the predecessor or similar games. Each is a Choice with
+  the sides a review can take (a topic can have more than two: too easy, too hard or well balanced) and *not
+  mentioned*, because most reviews say nothing about most topics.
+- **2. What reviewers say** adds up every batch read so far, and says how much of the game that is. The cards are
+  grouped under those headings. Each card's big number is the share for the thing in its title, so "Pay to win: 0%"
+  means nobody says it is. Cards are **green** when that is good for the game (a low pay to win, a high worth the
+  price), **amber** when mixed and **red** when bad. A review that does not mention a topic is left out of that topic's
+  percentage, and a topic that **fewer than 10 reviews mention gets no card at all**, because a handful of reviews can
+  read as 100% by chance; a line says how many topics are still missing. So cards appear as the run goes, and a
+  heading with nothing under it is not drawn. *Performance by platform* pairs the platform a review says it plays on
+  (Steam Deck, Linux, macOS, Nvidia, AMD, Intel) with whether it says the game runs well, one row per platform with
+  enough to go on.
+- **Progress** is a bar pinned in the bottom bar, right of Stop, while a run is going: the batch you are on. The totals
+  so far are under the link.
+- **3. This batch** covers the batch on screen: its count and tokens, an **Overview** of the answers, and a **Settings**
+  group (closed) holding Review flags, Composite score and the Accuracy check. **Export CSV** is for this batch. The
+  card folds shut from its header, which still shows how far the batch has got.
+- **4. The reviews in this batch** is a card of its own, **closed** until you open it, with the table **25 to a page**.
+  Sorting or filtering goes back to page 1. Both cards remember whether you left them open. The table shows the overall
+  positive answer as its one answer column (a column for every question would not fit); open a review to see every answer, and sort by any.
+- **Filtering the table.** The **Show** menu above the table lists every answer a review can have, grouped by topic
+  ("Community: Friendly, Toxic", "Developer responsiveness: Responsive, Unresponsive", and so on), each with how many
+  reviews in the batch gave it; answers nobody gave are left out. Picking one shows only those reviews, the same as
+  clicking a count on a card, and either way the menu and the bar above the table show what it is filtered by.
+  **Sort by** is deliberately short (original order, review text, review flags, certainty, composite score, and the
+  answer in the column that is shown): the certainty sort already covers every question, so there is not one per question.
+- **Click a count to see those reviews.** On each card the counts are clickable ("Pay to win: 26"): it opens the table,
+  scrolls to it and shows only the reviews that gave that answer, with a bar above the table saying what it is filtered
+  by and a **Clear filter** button. The table holds the batch on screen and no more (earlier batches were reduced to
+  counts), so when a count covers more than one batch the bar says so.
+- **Saved analyses.** **Save…** in the bottom bar keeps the analysis so far (asks for a title and an optional note; a
+  title that exists becomes *Overwrite*). Each one appears under **Steam reviews** in the menu, as a page with the same
+  cards and the **table of the batch it was saved with**, filterable in the same ways. **Continue analysis** and
+  **Delete** are in the bottom bar there, as the run buttons are on the Steam reviews page. Continue puts the analysis
+  back on the Steam reviews page, table included, to carry on from the same place.
+  The small record (counts, and where the next batch starts) is kept in local storage, a few kilobytes however many
+  reviews it covers. The batch's reviews are about 4 KB each, so they are kept in the browser's own database
+  (IndexedDB), which has room for them; a mark you make on a saved batch is kept with it. If a browser will not keep the
+  reviews the analysis is still saved, as counts only, and says so.
+- **Accuracy check:** Steam's thumbs up or down is supplied as the expected answer for the positive question, so you see
+  how often Jev's reading of the text agrees with the reviewer's own vote. Jev is never shown the thumbs, or the check
+  would mean nothing.
+- Everything else is the Batch engine: Stop and Resume, review flags, sorting. The questions are fixed, as on Rank.
+  Reviews are cleaned of Steam's markup and cut at 3000 characters. Reading reviews needs no API key, and it also works in
+  mock mode, where only Jev's answers are fake.
 
 ### Batch and Rank in detail
 
@@ -172,6 +249,11 @@ The server handles your API key, so it only listens on `127.0.0.1`, rejects requ
 (DNS rebinding), requires `Content-Type: application/json` on `/api/run` and saving a key (blocks cross-site form
 posts; `DELETE /api/key` needs a cross-origin preflight, which the server never grants), and sends a strict
 Content-Security-Policy. History, drafts, question sets and batch results are stored in your browser only.
+
+The page cannot call Steam itself under that policy, so `POST /api/steam/reviews` (JSON only, like `/api/run`) does it.
+Only the numeric app id from a pasted link is used to build the Steam request, so a link is never fetched as typed, and
+your TypeSafe key is never sent to Steam. Reviewers' names and profiles are not passed on to the page. The one other
+thing a request can carry, the cursor that says where the next batch starts, is only accepted if it looks like Steam's.
 
 TypeSafe's API does not allow browser requests from other origins (it answers a CORS preflight with
 `Disallowed CORS origin`), so this app can't be a static page on GitHub Pages; it needs the local server.

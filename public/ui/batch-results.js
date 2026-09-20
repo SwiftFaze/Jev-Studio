@@ -5,7 +5,7 @@ import { reviewCurve, reviewReasons, reviewSummary } from '../lib/review.js';
 import { compositeScore } from '../lib/composite.js';
 import { accuracyReport, collectVerdicts, countAutoChecked, isAutoChecked, markKey, suggestThreshold, verdictFor } from '../lib/accuracy.js';
 import { defaultDir, sortRows } from '../lib/table.js';
-import { summarizeRun } from '../lib/overview.js';
+import { runProgress, summarizeRun } from '../lib/overview.js';
 import { batchCsvRows } from '../lib/export.js';
 import { toCsv } from '../lib/csv.js';
 import { downloadText, fileStamp } from './download.js';
@@ -20,7 +20,12 @@ const TYPE_LABEL = { choice: 'Choice', noul: 'Yes / No', score: 'Score' };
  */
 export function renderBatchResults(root, run, hooks) {
   const ids = Object.keys(run.questions);
+  // Which questions get a column in the table. All of them, unless the caller asks for fewer (a column for every one of a couple of dozen questions will not fit);
+  // a row still opens to show every answer, and every question can still be sorted by.
+  const columnIds = hooks.columns ? ids.filter((id) => hooks.columns.includes(id)) : ids;
   const rank = run.kind === 'rank';
+  const noun = run.kind === 'rank' ? 'candidate' : run.kind === 'steam' ? 'review' : 'item';
+  const Noun = noun[0].toUpperCase() + noun.slice(1);
   const s = run.settings;
   run.marks ??= {};
   // Older runs could hold marks from "Validate all" (removed): those were approvals, not evidence, so drop them.
@@ -48,6 +53,7 @@ export function renderBatchResults(root, run, hooks) {
   /* ---------- progress ---------- */
   const fill = h('div', { class: 'bar-fill is-winner' });
   fill.style.width = '0%';
+  const progressMain = h('strong', { class: 'progress-main' }); // "387 of 500 reviews · 77%", the part to read at a glance
   const progressText = h('span', { class: 'muted small' });
   const stopBtn = h('button', { type: 'button', class: 'btn btn-sm', onclick: () => hooks.onStop?.() }, 'Stop');
   const resumeBtn = h('button', { type: 'button', class: 'btn btn-sm', onclick: () => hooks.onResume?.() }, 'Resume / retry failed');
@@ -55,16 +61,14 @@ export function renderBatchResults(root, run, hooks) {
   const fatalNote = h('p', { class: 'error', role: 'alert', hidden: true });
 
   function updateProgress() {
-    const rows = run.rows;
-    const ok = rows.filter((r) => r.status === 'ok').length;
-    const failed = rows.filter((r) => r.status === 'error').length;
-    const notRun = rows.length - ok - failed;
+    const { total, ok, failed, done, notRun, share, tokens } = runProgress(run.rows);
     const running = hooks.isRunning?.() ?? false;
-    const tokens = rows.reduce((sum, r) => sum + (r.response?.usage ? r.response.usage.input_tokens + r.response.usage.output_tokens : 0), 0);
 
-    fill.style.width = `${rows.length ? ((ok + failed) / rows.length) * 100 : 0}%`;
+    fill.style.width = `${share * 100}%`;
+    fill.classList.toggle('is-done', total > 0 && notRun === 0);
+    progressMain.textContent = `${done} of ${total} ${total === 1 ? noun : `${noun}s`} · ${Math.round(share * 100)}%`;
+    hooks.onProgressHeadline?.(progressMain.textContent); // for a card that can be folded, so its header still says how far along it is
     progressText.textContent = [
-      `${ok + failed} of ${rows.length} done`,
       failed > 0 && `${failed} failed`,
       !running && notRun > 0 && `${notRun} not run`,
       tokens > 0 && `${tokens.toLocaleString('en-US')} tokens`,
@@ -128,7 +132,7 @@ export function renderBatchResults(root, run, hooks) {
       h(
         'div',
         { class: 'stat-grid' },
-        stat(sum.total, sum.total === 1 ? 'item' : 'items'),
+        stat(sum.total, sum.total === 1 ? noun : `${noun}s`),
         stat(sum.ok, 'answered'),
         sum.failed > 0 && stat(sum.failed, 'failed', 'bad'),
         stat(sum.flagged, 'need review', sum.flagged > 0 ? 'warn' : 'good'),
@@ -159,6 +163,7 @@ export function renderBatchResults(root, run, hooks) {
     checked: s.onlyReview,
     onchange: (e) => {
       s.onlyReview = e.target.checked;
+      s.page = 0;
       refresh();
       changed();
     },
@@ -291,20 +296,26 @@ export function renderBatchResults(root, run, hooks) {
   }
 
   /* ---------- sorting and validating ---------- */
+  // With every question a column, sorting by each one's answer and certainty is useful. When only some are shown (the Steam
+  // page has two dozen questions), it is the answer in the column that is there, and the certainty across every question,
+  // which the general "Certainty" sort already is, so there is no need for two more entries per question.
   const sortChoices = [
     ['index', 'Original order'],
-    ['text', rank ? 'Candidate text' : 'Item text'],
+    ['text', `${Noun} text`],
     ['flags', 'Number of review flags'],
-    ['certainty', 'Certainty (lowest across questions)'],
+    ['certainty', hooks.columns ? 'Certainty' : 'Certainty (lowest across questions)'],
     ['composite', rank ? 'Score' : 'Composite score'],
-    ...ids.flatMap((id) => [
-      [`q:${id}`, `${id}: answer`],
-      [`c:${id}`, `${id}: certainty`],
-    ]),
+    ...(hooks.columns
+      ? columnIds.map((id) => [`q:${id}`, columnIds.length === 1 ? 'Answer' : `${id}: answer`])
+      : ids.flatMap((id) => [
+          [`q:${id}`, `${id}: answer`],
+          [`c:${id}`, `${id}: certainty`],
+        ])),
   ];
   const sortKeys = sortChoices.map(([key]) => key);
 
   function setSort(key, { toggle = false } = {}) {
+    s.page = 0;
     if (toggle && s.sort.key === key) s.sort = { key, dir: s.sort.dir === 'asc' ? 'desc' : 'asc' };
     else s.sort = { key, dir: defaultDir(key) };
     if (key === 'composite' && !s.compositeOn) {
@@ -318,7 +329,55 @@ export function renderBatchResults(root, run, hooks) {
   const sortSelect = h('select', { 'aria-label': 'Sort the table by', onchange: (e) => setSort(e.target.value) }, sortChoices.map(([key, label]) => h('option', { value: key }, label)));
   const dirBtn = h('button', { type: 'button', class: 'btn btn-sm', onclick: () => setSort(s.sort.key, { toggle: true }) });
 
-  const visibleRows = () => (s.onlyReview ? run.rows.filter((r) => reviewReasons(r, ids, s.minCertainty).length > 0) : run.rows);
+  /* ---------- a filter that something else can set, such as a click on a count on the summary ---------- */
+  let filter = null; // { label, test(row), note }, or null for no filter. Not saved: it lasts until cleared or the batch is replaced.
+  const filterBar = h('div', { class: 'filter-chip', role: 'status', hidden: true });
+
+  // A menu of the answers a review can have (`hooks.filterChoices`), each with how many in this batch gave it. Answers nobody
+  // gave are left out, so it lists what there is to see. Picking one is the same as clicking a count on a card.
+  const filterSelect = hooks.filterChoices
+    ? h('select', { 'aria-label': 'Show only the reviews that say', onchange: (e) => setFilter(choices.find((c) => c.filter.key === e.target.value)?.filter ?? null) })
+    : null;
+  let choices = []; // the choices in the menu as last drawn, to find the one picked
+  let filterMenuSignature = '';
+
+  function updateFilterMenu() {
+    if (!filterSelect) return;
+    const selected = filter?.key ?? '';
+    const groups = hooks
+      .filterChoices()
+      .map((g) => ({ group: g.group, items: g.items.map((item) => ({ ...item, n: run.rows.filter((r) => item.filter.test(r)).length })).filter((item) => item.n > 0 || item.filter.key === selected) }))
+      .filter((g) => g.items.length > 0);
+    // Redraw only when something changed, so the menu is not rebuilt under someone who is choosing from it while a run goes on.
+    const signature = JSON.stringify([selected, groups.map((g) => [g.group, g.items.map((i) => [i.filter.key, i.n])])]);
+    if (signature === filterMenuSignature) return;
+    filterMenuSignature = signature;
+    choices = groups.flatMap((g) => g.items);
+    filterSelect.replaceChildren(h('option', { value: '' }, 'All reviews'), ...groups.map((g) => h('optgroup', { label: g.group }, g.items.map((i) => h('option', { value: i.filter.key }, `${i.label} (${i.n})`)))));
+    filterSelect.value = selected;
+  }
+
+  function setFilter(next) {
+    filter = next;
+    s.page = 0;
+    refresh();
+  }
+
+  function updateFilterBar(shown) {
+    filterBar.hidden = !filter;
+    if (!filter) return;
+    filterBar.replaceChildren(
+      h('span', {}, 'Showing ', h('strong', {}, String(shown)), ` of ${run.rows.length} ${noun}s in this batch: `, h('strong', {}, filter.label), filter.note ? ` ${filter.note}` : ''),
+      h('button', { type: 'button', class: 'btn btn-sm', onclick: () => setFilter(null) }, 'Clear filter'),
+    );
+  }
+
+  const visibleRows = () => {
+    let rows = run.rows;
+    if (filter) rows = rows.filter((r) => filter.test(r));
+    if (s.onlyReview) rows = rows.filter((r) => reviewReasons(r, ids, s.minCertainty).length > 0);
+    return rows;
+  };
 
   function clearMarks() {
     if (!confirm('Remove all your ✓ / ✗ marks? Verdicts that come from expected answers in your CSV stay.')) return;
@@ -329,7 +388,38 @@ export function renderBatchResults(root, run, hooks) {
 
   const clearBtn = h('button', { type: 'button', id: `${run.kind}-clear-marks`, class: 'btn btn-ghost btn-sm', onclick: clearMarks }, 'Clear marks');
 
-  const toolbar = h('div', { class: 'table-toolbar' }, h('label', { class: 'small toolbar-sort' }, 'Sort by ', sortSelect), dirBtn, rank ? null : clearBtn);
+  /* ---------- pages: only when the caller asks (a long list reads better a page at a time), and one at the top and one below ---------- */
+  const pageSize = hooks.pageSize ?? 0;
+  const pagers = pageSize ? [h('div', { class: 'pager' }), h('div', { class: 'pager' })] : [];
+  let pageOffset = 0;
+
+  function goToPage(page, { scroll = false } = {}) {
+    s.page = page;
+    refresh();
+    changed();
+    if (scroll) toolbar.scrollIntoView({ block: 'start' }); // the pager under a long page is far from the top of the next one
+  }
+
+  /** The rows on the current page (all of them when there are no pages), with the pagers redrawn to match. */
+  function pageOf(rows) {
+    if (!pageSize) return rows;
+    const pages = Math.max(1, Math.ceil(rows.length / pageSize));
+    s.page = Math.min(Math.max(0, s.page ?? 0), pages - 1); // a filter can leave fewer pages than the one we were on
+    pageOffset = s.page * pageSize;
+    const from = rows.length ? pageOffset + 1 : 0;
+    const to = Math.min(rows.length, pageOffset + pageSize);
+    pagers.forEach((pager, i) => {
+      pager.hidden = pages <= 1;
+      pager.replaceChildren(
+        h('button', { type: 'button', class: 'btn btn-sm', disabled: s.page === 0, onclick: () => goToPage(s.page - 1, { scroll: i === 1 }) }, '‹ Previous'),
+        h('span', { class: 'small pager-info' }, `${from}-${to} of ${rows.length} · page ${s.page + 1} of ${pages}`),
+        h('button', { type: 'button', class: 'btn btn-sm', disabled: s.page >= pages - 1, onclick: () => goToPage(s.page + 1, { scroll: i === 1 }) }, 'Next ›'),
+      );
+    });
+    return rows.slice(pageOffset, pageOffset + pageSize);
+  }
+
+  const toolbar = h('div', { class: 'table-toolbar' }, h('label', { class: 'small toolbar-sort' }, 'Sort by ', sortSelect), dirBtn, filterSelect && h('label', { class: 'small toolbar-filter' }, 'Show ', filterSelect), rank ? null : clearBtn, pagers[0]);
 
   function updateToolbar() {
     sortSelect.value = sortKeys.includes(s.sort.key) ? s.sort.key : 'index';
@@ -413,20 +503,25 @@ export function renderBatchResults(root, run, hooks) {
       : row.status === 'ok'
         ? h('div', { class: 'answers' }, ids.map((id) => answerCard(id, run.questions[id], row.response.answers?.[id])))
         : h('p', { class: 'muted' }, 'Not run yet.');
-    return h('tr', { class: 'detail-row' }, h('td', { colspan: String(columns) }, h('p', { class: 'detail-text' }, row.text), body));
+    const extra = hooks.describeRow?.(row);
+    return h('tr', { class: 'detail-row' }, h('td', { colspan: String(columns) }, h('p', { class: 'detail-text' }, row.text), extra && h('p', { class: 'muted small' }, extra), body));
   }
 
   function buildTable() {
-    const rows = sortRows(visibleRows(), s.sort, { questions: run.questions, specs: run.specs, minCertainty: s.minCertainty });
+    const sorted = sortRows(visibleRows(), s.sort, { questions: run.questions, specs: run.specs, minCertainty: s.minCertainty });
+    updateFilterBar(sorted.length);
+    updateFilterMenu();
+    const rows = pageOf(sorted);
+    hooks.onTableHeadline?.(`${sorted.length} ${sorted.length === 1 ? noun : `${noun}s`}${s.onlyReview ? ' need review' : ''}`);
 
     const ranked = rank && s.sort.key === 'composite' && s.sort.dir === 'desc';
-    const columns = 3 + ids.length + (s.compositeOn ? 1 : 0);
+    const columns = 3 + columnIds.length + (s.compositeOn ? 1 : 0);
     const head = h(
       'tr',
       {},
       th(ranked ? 'Rank' : '#', 'index'),
-      th(rank ? 'Candidate' : 'Item', 'text'),
-      ids.map((id) => th(id, `q:${id}`)),
+      th(Noun, 'text'),
+      columnIds.map((id) => th(id, `q:${id}`)),
       s.compositeOn ? th(rank ? 'Score' : 'Composite', 'composite') : null,
       th('Review', 'flags'),
     );
@@ -454,9 +549,9 @@ export function renderBatchResults(root, run, hooks) {
               }
             },
           },
-          h('td', { class: 'num' }, String(ranked ? pos + 1 : row.index + 1)),
+          h('td', { class: 'num' }, String(ranked ? pos + pageOffset + 1 : row.index + 1)),
           h('td', { class: 'item-cell', title: row.text }, row.text),
-          ids.map((id) => answerCell(row, id)),
+          columnIds.map((id) => answerCell(row, id)),
           s.compositeOn ? h('td', { class: 'cell' }, score == null ? '' : h('div', { class: 'cell-main' }, h('span', { class: 'cell-label' }, String(Math.round(score * 100))), bar(score, { winner: true }))) : null,
           reviewCell(row),
         ),
@@ -483,18 +578,23 @@ export function renderBatchResults(root, run, hooks) {
     tableHost.replaceChildren(buildTable());
   }
 
+  // The three panels about how answers are judged can sit together under one Settings panel, out of the way.
+  const settings = hooks.groupSettings
+    ? panel('settings', 'Settings', {}, review.details, composite.details, accuracy?.details)
+    : null;
+
+  // The table can live somewhere else on the page (its own card); otherwise it follows the panels.
+  if (hooks.tableRoot) hooks.tableRoot.replaceChildren(filterBar, toolbar, tableHost, pagers[1] ?? '');
+
   root.replaceChildren(
     ...[
-      h('div', { class: 'bulk-summary' }, h('div', { class: 'bulk-progress' }, h('div', { class: 'bar' }, fill), progressText), h('div', { class: 'bulk-actions' }, stopBtn, resumeBtn, exportBtn)),
+      h('div', { class: 'bulk-summary' }, h('div', { class: 'bulk-progress' }, progressMain, hooks.hideProgressBar ? null : h('div', { class: 'bar bar-big' }, fill), progressText), h('div', { class: 'bulk-actions' }, stopBtn, resumeBtn, exportBtn)),
       fatalNote,
       overview.details,
-      review.details,
-      composite.details,
-      accuracy?.details,
-      toolbar,
-      tableHost,
+      ...(settings ? [settings.details] : [review.details, composite.details, accuracy?.details]),
+      ...(hooks.tableRoot ? [] : [filterBar, toolbar, tableHost, pagers[1]]),
     ].filter(Boolean),
   );
   refresh();
-  return { refresh };
+  return { refresh, setFilter };
 }

@@ -1,16 +1,21 @@
 import { TEMPLATES, TYPE_EXAMPLES } from '../templates.js';
 import { draftFromRequest, migrateDraft } from '../request.js';
 import { addUsage, emptyUsage } from '../lib/usage.js';
+import { emptyTally, mergeTallies, STEAM_BATCH_SIZES, STEAM_SORTS } from '../lib/steam.js';
 
 // Pages where you write questions. `custom` is the page labelled "Single" in the UI: it takes any question type.
 // The others are locked to one type each.
 export const PAGE_TYPE = { yesno: 'noul', score: 'score', choice: 'choice' };
 export const PAGES = ['custom', 'yesno', 'score', 'choice'];
-export const MODES = [...PAGES, 'batch', 'rank', 'compare'];
+export const MODES = [...PAGES, 'batch', 'rank', 'steam', 'compare'];
 
 // A saved question set is a page of its own, addressed as `set:<id>`.
 export const isSetMode = (mode) => typeof mode === 'string' && mode.startsWith('set:');
 export const setIdOf = (mode) => mode.slice('set:'.length);
+
+// A saved Steam analysis is a page of its own too, addressed as `steamsaved:<id>`.
+export const isSteamSavedMode = (mode) => typeof mode === 'string' && mode.startsWith('steamsaved:');
+export const steamSavedIdOf = (mode) => mode.slice('steamsaved:'.length);
 
 const KEYS = {
   draft: 'jev-studio:draft:v1', // the Custom page (and the questions Batch uses)
@@ -21,6 +26,8 @@ const KEYS = {
   setsMenu: 'jev-studio:setsmenu:v1', // whether the sidebar's Question sets submenu is open
   batch: 'jev-studio:batch:v1',
   rank: 'jev-studio:rank:v1',
+  steam: 'jev-studio:steam:v3', // v1 kept every review of one sample, v2 counted six topics; v3 counts each option of twenty, a different shape
+  steamSaved: 'jev-studio:steamsaved:v1', // analyses saved from the Steam page: counts and where to carry on, not reviews
   mode: 'jev-studio:mode:v1',
 };
 const TOKENS_KEY = 'jev-studio:tokens:v1'; // per tab (sessionStorage): a running total for this visit
@@ -81,11 +88,42 @@ function batchDraft(stored) {
 }
 const storedBatch = readStore(KEYS.batch, {});
 const storedRank = readStore(KEYS.rank, {});
+const storedSteam = readStore(KEYS.steam, {});
+const storedSteamSaved = (() => {
+  const stored = readStore(KEYS.steamSaved, []);
+  return (Array.isArray(stored) ? stored : []).filter((s) => s && typeof s.id === 'string' && typeof s.name === 'string').map((s) => ({ ...s, tally: mergeTallies(emptyTally(), s.tally), ...(s.total ? { total: mergeTallies(emptyTally(), s.total) } : {}), hasRun: s.hasRun === true }));
+})();
+
+/** The Steam page's saved state, with anything missing or no longer valid put back to its default. */
+function steamSlice(stored) {
+  const pick = (value, allowed, fallback) => (allowed.includes(value) ? value : fallback);
+  return {
+    url: typeof stored.url === 'string' ? stored.url : '',
+    count: pick(stored.count, STEAM_BATCH_SIZES, 100), // the batch size
+    sort: pick(stored.sort, Object.keys(STEAM_SORTS), 'recent'),
+    concurrency: pick(stored.concurrency, [1, 2, 3, 4, 5, 6], 3),
+    game: stored.game ?? null,
+    summary: stored.summary ?? null,
+    key: typeof stored.key === 'string' ? stored.key : null,
+    cursor: typeof stored.cursor === 'string' ? stored.cursor : '*',
+    exhausted: stored.exhausted === true,
+    batches: Number.isInteger(stored.batches) ? stored.batches : 0,
+    tally: mergeTallies(emptyTally(), stored.tally),
+    savedId: typeof stored.savedId === 'string' ? stored.savedId : null, // the saved analysis this one was carried on from, so saving again offers to overwrite it
+    tellThumbs: stored.tellThumbs === true, // off: Jev reads the review without knowing the reviewer's thumbs (see buildSteamState)
+    batchOpen: stored.batchOpen !== false, // "This batch" starts open; the table below it starts closed
+    tableOpen: stored.tableOpen === true,
+    run: normalizeRun(stored.run),
+  };
+}
 
 const storedSets = readStore(KEYS.sets, []);
 // A saved mode that is no longer a page (or a set that has since been deleted) falls back to the first page.
 const storedMode = readStore(KEYS.mode, 'custom');
-const modeStillExists = MODES.includes(storedMode) || (isSetMode(storedMode) && storedSets.some((s) => s.id === setIdOf(storedMode)));
+const modeStillExists =
+  MODES.includes(storedMode) ||
+  (isSetMode(storedMode) && storedSets.some((s) => s.id === setIdOf(storedMode))) ||
+  (isSteamSavedMode(storedMode) && storedSteamSaved.some((s) => s.id === steamSavedIdOf(storedMode)));
 
 export const app = {
   mode: modeStillExists ? storedMode : 'custom',
@@ -109,6 +147,13 @@ export const app = {
   setsMenuOpen: readStore(KEYS.setsMenu, true),
   batch: { text: '', imported: [], concurrency: 3, ...storedBatch, run: normalizeRun(storedBatch.run) },
   rank: { query: '', text: '', concurrency: 3, ...storedRank, run: normalizeRun(storedRank.run) },
+  // The Steam page. Reviews are read and analysed one batch at a time, each starting where the last stopped, so a game
+  // with hundreds of thousands of them is never held all at once. What is kept: `run` (the current batch, with its rows),
+  // `tally` (counts for every earlier batch, which is all the summary needs), and `cursor` (where the next batch starts).
+  // `key` says which game and sort those belong to, so changing one starts over; `summary` is Steam's own totals for
+  // the game; `batches` counts the ones read, including the current one.
+  steam: steamSlice(storedSteam),
+  steamSaved: storedSteamSaved,
   tokens: { ...emptyUsage(), ...readStore(TOKENS_KEY, {}, 'session') },
   status: { configured: false, mock: false, keySource: 'none' },
 };
@@ -124,6 +169,8 @@ export const save = {
   mode: () => writeStore(KEYS.mode, app.mode),
   batch: () => writeWithRun(KEYS.batch, app.batch),
   rank: () => writeWithRun(KEYS.rank, app.rank),
+  steam: () => writeWithRun(KEYS.steam, app.steam),
+  steamSaved: () => writeStore(KEYS.steamSaved, app.steamSaved), // false when the browser has no room
 };
 
 const tokenListeners = new Set();

@@ -1,11 +1,15 @@
 import { h } from './dom.js';
-import { BATCH_EXAMPLES, RANK_EXAMPLES, TEMPLATES, TYPE_EXAMPLES } from './templates.js';
+import { BATCH_EXAMPLES, RANK_EXAMPLES, STEAM_EXAMPLES, TEMPLATES, TYPE_EXAMPLES } from './templates.js';
 import { draftFromRequest, questionsFromApi, stateToText } from './request.js';
-import { app, hasQuestionWork, isSetMode, MODES, onTokens, PAGES, PAGE_TYPE, save, setIdOf } from './ui/state.js';
+import { app, hasQuestionWork, isSetMode, isSteamSavedMode, MODES, onTokens, PAGES, PAGE_TYPE, save, setIdOf, steamSavedIdOf } from './ui/state.js';
 import { initBuilder, renderBuilder, setBuilderPage } from './ui/builder.js';
 import { createWorkspace } from './ui/workspace.js';
 import { createSetPage } from './ui/setpage.js';
 import { initBulk } from './ui/bulk.js';
+import { initSteam } from './ui/steam.js';
+import { createSteamSavedPage, renderSteamSavedMenu } from './ui/steam-saved.js';
+import { getBatch } from './ui/idb.js';
+import { fieldsFromSaved } from './lib/steam.js';
 import { initCompare, openCompare, refreshCompare } from './ui/compare.js';
 import { initDialogs, openCsvDialog } from './ui/dialogs.js';
 import { closeMenu, initSidebar, renderSetsMenu } from './ui/sidebar.js';
@@ -19,12 +23,13 @@ const $ = (selector) => document.querySelector(selector);
 const workspaces = {}; // one per question page: custom, yesno, score, choice
 const bulk = {};
 let setPage = null; // the page that serves every saved question set
+let steamSavedPage = null; // the page that serves every saved Steam analysis
 let newQueryFor = {}; // which containers a mode uses -> its "New query" action
 let measureBars = null;
 
 /** Every saved set shares one set of containers (`mode-set`, `pane-set`, `runbar-set`). */
-const keyOf = (mode) => (isSetMode(mode) ? 'set' : mode);
-const CONTAINER_KEYS = [...MODES, 'set'];
+const keyOf = (mode) => (isSetMode(mode) ? 'set' : isSteamSavedMode(mode) ? 'steamsaved' : mode);
+const CONTAINER_KEYS = [...MODES, 'set', 'steamsaved'];
 
 /**
  * The header and the bottom bar are pinned, so tell the CSS how tall they are: scroll targets and keyboard focus
@@ -49,7 +54,7 @@ function trackBars() {
 /* ---------- pages ---------- */
 
 function setMode(mode) {
-  const known = isSetMode(mode) ? app.sets.some((s) => s.id === setIdOf(mode)) : MODES.includes(mode);
+  const known = isSetMode(mode) ? app.sets.some((s) => s.id === setIdOf(mode)) : isSteamSavedMode(mode) ? app.steamSaved.some((a) => a.id === steamSavedIdOf(mode)) : MODES.includes(mode);
   if (!known) mode = 'custom';
   app.mode = mode;
   save.mode();
@@ -57,6 +62,7 @@ function setMode(mode) {
   const key = keyOf(mode);
   const isPage = PAGES.includes(mode);
   const isSet = key === 'set';
+  const isSteamSaved = key === 'steamsaved';
 
   for (const k of CONTAINER_KEYS) {
     $(`#mode-${k}`).hidden = k !== key;
@@ -69,9 +75,10 @@ function setMode(mode) {
   $('#builder-panel').hidden = !isPage && mode !== 'batch';
   if (isPage || mode === 'batch') setBuilderPage(mode);
   if (isSet) setPage.open(setIdOf(mode));
+  if (isSteamSaved) steamSavedPage.open(steamSavedIdOf(mode));
 
   // How the page is laid out and in what order (see the CSS): questions / input / answers, input / questions / results, ...
-  const kind = isPage ? 'page' : isSet ? 'set' : mode === 'compare' ? 'compare' : 'bulk';
+  const kind = isPage ? 'page' : isSet ? 'set' : mode === 'compare' || isSteamSaved ? 'compare' : 'bulk';
   $('#layout').dataset.kind = kind;
 
   // Controls that do not apply are made invisible rather than removed, so nothing else on screen moves.
@@ -110,6 +117,17 @@ function restoreRun(entry) {
   workspaces[page].showRun(entry);
 }
 
+/* ---------- saved Steam analyses ---------- */
+
+/** Continue analysis: put a saved analysis back on the Steam reviews page, where it carries on from where it stopped. */
+async function continueSteam(saved) {
+  if (bulk.steam.hasWork() && !confirm('Replace what is on the Steam reviews page with this saved analysis?')) return;
+  const run = saved.hasRun ? await getBatch(saved.id).catch(() => null) : null; // its batch of reviews is kept in the browser's database
+  bulk.steam.restore({ ...fieldsFromSaved(saved, run), savedId: saved.id });
+  setMode('steam');
+  if (saved.hasRun && !run) flash('The saved reviews could not be read, so the table is empty. The counts are kept.');
+}
+
 /* ---------- question sets ---------- */
 
 /** The saved sets changed (saved, imported, deleted): refresh the menu, and leave a set page whose set is gone. */
@@ -129,8 +147,8 @@ function editSet(id) {
 
 /* ---------- examples ---------- */
 
-const examplesFor = (mode) => (mode === 'custom' ? TEMPLATES : mode === 'rank' ? RANK_EXAMPLES : mode === 'batch' ? BATCH_EXAMPLES : (TYPE_EXAMPLES[mode] ?? []));
-const hasExamples = (mode) => PAGES.includes(mode) || mode === 'rank' || mode === 'batch';
+const examplesFor = (mode) => (mode === 'custom' ? TEMPLATES : mode === 'rank' ? RANK_EXAMPLES : mode === 'batch' ? BATCH_EXAMPLES : mode === 'steam' ? STEAM_EXAMPLES : (TYPE_EXAMPLES[mode] ?? []));
+const hasExamples = (mode) => PAGES.includes(mode) || mode === 'rank' || mode === 'batch' || mode === 'steam';
 
 function renderExampleMenu(mode) {
   const select = $('#template');
@@ -152,6 +170,11 @@ function setupExamples() {
       if (bulk.rank.hasWork() && !confirm('Replace the current query, candidates and results?')) return;
       const example = RANK_EXAMPLES[Number(value)];
       bulk.rank.load({ query: example.query, text: example.candidates.join('\n') });
+      return;
+    }
+    if (page === 'steam') {
+      if (bulk.steam.hasWork() && !confirm('Replace the current link, reviews and results?')) return;
+      bulk.steam.load({ url: STEAM_EXAMPLES[Number(value)].url });
       return;
     }
     if (page === 'batch') {
@@ -235,9 +258,12 @@ const openComparison = (previous, latest) => {
 };
 for (const page of PAGES) workspaces[page] = createWorkspace(page, { onCompare: openComparison });
 setPage = createSetPage({ onCompare: openComparison });
+steamSavedPage = createSteamSavedPage({ onContinue: continueSteam, onDeleted: () => setMode('steam') });
+renderSteamSavedMenu();
 initBuilder();
 bulk.batch = initBulk('batch', { openCsv: openCsvDialog });
 bulk.rank = initBulk('rank');
+bulk.steam = initSteam();
 initCompare();
 initSidebar({ onNavigate: setMode });
 initSaveSet({ onSetsChanged });
@@ -260,11 +286,11 @@ initApiKey({
 });
 
 // What "New query" does on each kind of page; Compare has nothing to clear.
-newQueryFor = { batch: () => bulk.batch.reset(), rank: () => bulk.rank.reset(), set: () => setPage.newQuery() };
+newQueryFor = { batch: () => bulk.batch.reset(), rank: () => bulk.rank.reset(), steam: () => bulk.steam.reset(), set: () => setPage.newQuery() };
 for (const page of PAGES) newQueryFor[page] = workspaces[page].newQuery;
 $('#new-query').addEventListener('click', () => newQueryFor[keyOf(app.mode)]?.());
 
-const runners = { batch: () => bulk.batch.start(), rank: () => bulk.rank.start(), set: () => setPage.run() };
+const runners = { batch: () => bulk.batch.start(), rank: () => bulk.rank.start(), steam: () => bulk.steam.start(), set: () => setPage.run() };
 for (const page of PAGES) runners[page] = workspaces[page].run;
 document.addEventListener('keydown', (e) => {
   const run = runners[keyOf(app.mode)];

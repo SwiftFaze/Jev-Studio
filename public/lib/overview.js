@@ -57,3 +57,19 @@ export function summarizeRun(run) {
     questions,
   };
 }
+
+/** How far a run has got: finished rows (answered or failed), what is left, the share done, and the tokens used so far. */
+export function runProgress(rows) {
+  const ok = rows.filter((r) => r.status === 'ok').length;
+  const failed = rows.filter((r) => r.status === 'error').length;
+  const done = ok + failed;
+  return {
+    total: rows.length,
+    ok,
+    failed,
+    done,
+    notRun: rows.length - done,
+    share: rows.length ? done / rows.length : 0,
+    tokens: rows.reduce((sum, r) => sum + (r.response?.usage ? r.response.usage.input_tokens + r.response.usage.output_tokens : 0), 0),
+  };
+}

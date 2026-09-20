@@ -4,6 +4,7 @@ import { compositeScore } from './composite.js';
 import { collectVerdicts, verdictFor } from './accuracy.js';
 
 const TYPE_LABEL = { choice: 'Choice', noul: 'Yes / No', score: 'Score' };
+const ITEM_HEADER = { rank: 'candidate', steam: 'review' };
 const pct = (p) => `${Math.round(p * 100)}%`;
 const round4 = (n) => Math.round(n * 10000) / 10000;
 
@@ -54,7 +55,8 @@ export function batchCsvRows(run) {
   const ids = Object.keys(questions);
   const hasVerdicts = collectVerdicts(rows, questions, marks).length > 0;
 
-  const header = ['#', kind === 'rank' ? 'candidate' : 'item'];
+  const header = ['#', ITEM_HEADER[kind] ?? 'item'];
+  if (kind === 'steam') header.push('steam_thumbs_up', 'hours_total', 'hours_at_review', 'hours_last_two_weeks', 'votes_helpful', 'refunded', 'free_copy');
   for (const id of ids) header.push(...columnNames(id, questions[id]));
   if (compositeOn) header.push('composite_0_100');
   header.push('needs_review', 'review_reason');
@@ -63,6 +65,11 @@ export function batchCsvRows(run) {
   const body = rows.map((row) => {
     const ok = row.status === 'ok';
     const cells = [row.index + 1, row.text];
+    if (kind === 'steam') {
+      const m = row.meta ?? {};
+      const yesNo = (v) => (v == null ? '' : v ? 'yes' : 'no');
+      cells.push(yesNo(m.votedUp), m.hoursTotal ?? '', m.hoursAtReview ?? '', m.hoursRecent ?? '', m.votesUp ?? '', yesNo(m.refunded), yesNo(m.freeCopy));
+    }
     for (const id of ids) cells.push(...answerCells(ok ? row.response.answers?.[id] : null, questions[id]));
 
     if (compositeOn) {
