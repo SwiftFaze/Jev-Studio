@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { describeSteamReview, savedTotal, steamFilter, steamFilterChoices, pickLabel, fieldsFromSaved, rowHasAnswer, savedTally, snapshotOf, moreSlider, reviewsFor, roughDuration, roughTokens, batchReplyProblem, buildSteamState, cleanReviewText, emptyTally, expectedFor, MAX_REVIEW_CHARS, mergeTallies, MIN_MENTIONS, NOT_MENTIONED, parseSteamApp, steamQuestions, steamSpecs, STEAM_BATCH_SIZES, STEAM_GROUPS, STEAM_MAX_BATCH, STEAM_PLATFORM, STEAM_TOPICS, storeUrl, summarizeSteam, summarizeTally, tallyRows, thumbsUpShare, toneFor, visibleGroups } from '../public/lib/steam.js';
+import { GROUP_REVIEW_MAX_CHARS, SHARE_BANDS, buildGroupState, chunkReviews, clipForGroup, groupTallyRows, mergeGroupTallies, questionSignature, savedGroupTally, savedGroupTotal, shareFromAnswer, steamGroupQuestions, summarizeGroupTally, tokensPerReviewEstimate, STEAM_QUESTION_IDS, emptyGroupTally, describeSteamReview, savedTotal, steamFilter, steamFilterChoices, pickLabel, fieldsFromSaved, rowHasAnswer, savedTally, snapshotOf, moreSlider, reviewsFor, roughDuration, roughTokens, batchReplyProblem, buildSteamState, cleanReviewText, emptyTally, expectedFor, MAX_REVIEW_CHARS, mergeTallies, MIN_MENTIONS, NOT_MENTIONED, parseSteamApp, steamQuestions, steamSpecs, STEAM_BATCH_SIZES, STEAM_GROUPS, STEAM_MAX_BATCH, STEAM_PLATFORM, STEAM_TOPICS, storeUrl, summarizeSteam, summarizeTally, tallyRows, thumbsUpShare, toneFor, visibleGroups } from '../public/lib/steam.js';
 import { batchCsvRows } from '../public/lib/export.js';
 import { verdictFor } from '../public/lib/accuracy.js';
 import { parseCsv, toCsv } from '../public/lib/csv.js';
@@ -582,14 +582,14 @@ test('a topic with too little data is left out entirely, and so is a heading wit
   assert.deepEqual(groups[0].topics.map((t) => t.id), ['positive']);
   assert.deepEqual(groups[1].topics.map((t) => t.id), ['performance']);
   assert.deepEqual(groups[1].platforms.map((p) => p.key), ['steam_deck'], 'the platform row sits with the technical topics');
-  assert.equal(hidden, STEAM_TOPICS.length - 2);
+  assert.equal(hidden, 1, 'only difficulty was asked about and left out for too little data; the topics nobody was asked about are not counted');
   for (const g of groups) for (const t of g.topics) assert.equal(t.tooFew, false);
 });
 
-test('with no data at all there are no groups, and every topic counts as hidden', () => {
+test('with no data at all there are no groups, and nothing counts as hidden, because nothing has been asked yet', () => {
   const { groups, hidden } = visibleGroups(summarizeTally(emptyTally()));
   assert.deepEqual(groups, []);
-  assert.equal(hidden, STEAM_TOPICS.length);
+  assert.equal(hidden, 0);
 });
 
 test('a card appears once enough reviews mention its topic, and not before', () => {
@@ -758,7 +758,7 @@ test('the reviews a click shows are exactly the ones the card counted', () => {
 const sliceWith = (run, extra = {}) => ({
   url: 'https://store.steampowered.com/app/548430/Deep_Rock_Galactic/', sort: 'recent', count: 100, tellThumbs: false,
   game: { appId: '548430', name: 'Deep Rock Galactic' }, summary: { scoreDesc: 'Overwhelmingly Positive', totalPositive: 9, totalNegative: 1, totalReviews: 1000 },
-  key: '548430|recent', cursor: 'AoJ4zb/z36ADe9WSgwc=', exhausted: false, batches: 3, tally: tallyRows(rowsOf('story', { good_story: 12, not_mentioned: 8 })), run, ...extra,
+  key: '548430|recent', cursor: 'AoJ4zb/z36ADe9WSgwc=', exhausted: false, batches: 3, topics: [...STEAM_QUESTION_IDS], grouped: false, groupSize: 50, gtally: emptyGroupTally(), tally: tallyRows(rowsOf('story', { good_story: 12, not_mentioned: 8 })), run, ...extra,
 });
 
 test('saving keeps the batch on screen with its reviews, and the counts for the batches before it', () => {
@@ -927,4 +927,263 @@ test('the menu only mentions batches when there is more than one', () => {
   const note = (opts) => steamFilterChoices(opts)[0].items[0].filter.note;
   assert.equal(note({ batches: 1 }), '');
   assert.match(note({ batches: 2, where: 'the batch it was saved with' }), /only the batch it was saved with/);
+});
+
+/* ---------- switching questions on and off ---------- */
+
+const SIX = ['positive', 'worth_price', 'pay_to_win', 'performance', 'stability', 'replayability'];
+
+test('with no choice made every question is asked, and switching some off asks only the others, in the same order', () => {
+  assert.deepEqual(Object.keys(steamQuestions()), STEAM_QUESTION_IDS);
+  assert.deepEqual(Object.keys(steamQuestions(null)), STEAM_QUESTION_IDS);
+  assert.deepEqual(Object.keys(steamQuestions(['pay_to_win', 'positive'])), ['positive', 'pay_to_win'], 'the topics keep their own order, not the order they were ticked');
+  assert.deepEqual(Object.keys(steamQuestions([])), []);
+  assert.deepEqual(Object.keys(steamQuestions(['nonsense'])), [], 'an id that is not a question asks nothing');
+  assert.equal(validateRequest({ state: 'x', questions: steamQuestions(SIX) }).ok, true);
+});
+
+test('the platform question is its own switch', () => {
+  assert.ok(steamQuestions(['performance', STEAM_PLATFORM.id])[STEAM_PLATFORM.id]);
+  assert.equal(STEAM_PLATFORM.id in steamQuestions(['performance']), false);
+  assert.deepEqual(STEAM_QUESTION_IDS.at(-1), STEAM_PLATFORM.id);
+  assert.equal(STEAM_QUESTION_IDS.length, STEAM_TOPICS.length + 1);
+});
+
+test('the composite defaults cover exactly the questions that are on', () => {
+  for (const enabled of [null, SIX, ['difficulty'], ['positive', STEAM_PLATFORM.id]]) {
+    assert.deepEqual(Object.keys(steamSpecs(enabled)), Object.keys(steamQuestions(enabled)));
+  }
+});
+
+test('the signature says which questions are on, whatever order they were ticked in', () => {
+  assert.equal(questionSignature(['pay_to_win', 'positive']), questionSignature(['positive', 'pay_to_win']));
+  assert.notEqual(questionSignature(['positive']), questionSignature(['positive', 'pay_to_win']));
+  assert.equal(questionSignature(null), questionSignature([...STEAM_QUESTION_IDS]));
+});
+
+test('a topic that is switched off has no card, and is not counted as one that is missing for want of data', () => {
+  const rows = Array.from({ length: 12 }, (_, i) => answered(i, { positive: noul(0.9), performance: choice('runs_badly') }));
+  const { groups, hidden } = visibleGroups(summarizeTally(tallyRows(rows)));
+  assert.deepEqual(groups.flatMap((g) => g.topics.map((t) => t.id)), ['positive', 'performance']);
+  assert.equal(hidden, 0, 'the other twenty-one were never asked, so there is nothing to say about them');
+});
+
+/* ---------- grouping reviews ---------- */
+
+const bandAnswer = (band) => ({ type: 'score', score: band, confidence: 1, legend: {}, probabilities: Object.fromEntries(SHARE_BANDS.map((_, i) => [String(i), i === band ? 1 : 0])) });
+/** A group row: `size` reviews, and Jev's answer (a band from 0 to 5) to the good-side and bad-side question of each topic given. */
+const groupRow = (index, size, bands = {}, extra = {}) => ({
+  index, size, texts: Array.from({ length: size }, (_, i) => `review ${i}`), status: 'ok',
+  response: { answers: Object.fromEntries(Object.entries(bands).flatMap(([id, [good, bad]]) => [[`${id}_good`, bandAnswer(good)], [`${id}_bad`, bandAnswer(bad)]])), usage: { input_tokens: 900, output_tokens: 100 } },
+  ...extra,
+});
+
+test('a group is two share questions per topic, each answered as a band, and they are valid requests', () => {
+  const questions = steamGroupQuestions();
+  assert.equal(Object.keys(questions).length, STEAM_TOPICS.length * 2);
+  assert.deepEqual(Object.keys(steamGroupQuestions(['friends', 'pay_to_win'])), ['pay_to_win_good', 'pay_to_win_bad', 'friends_good', 'friends_bad'], 'in the topics\' own order, two for each');
+  assert.equal(validateRequest({ state: 'x', questions }).ok, true);
+  for (const q of Object.values(questions)) {
+    assert.equal(q.type, 'score');
+    assert.equal(q.criteria.length, SHARE_BANDS.length);
+    assert.match(q.instructions, /What share of the reviews below match/);
+  }
+  // the question quotes what counts, so it is the same judgment as reading the reviews one by one
+  const p2w = steamGroupQuestions(['pay_to_win']);
+  assert.match(p2w.pay_to_win_bad.instructions, /Says spending money gives an advantage/);
+  assert.match(p2w.pay_to_win_good.instructions, /fair to players who pay nothing/);
+  const diff = steamGroupQuestions(['difficulty']);
+  assert.match(diff.difficulty_bad.instructions, / or /, 'a side with two answers (too easy, too hard) is asked as either');
+  assert.match(diff.difficulty_bad.instructions, /too easy/i);
+  assert.match(diff.difficulty_bad.instructions, /too hard/i);
+});
+
+test('the bands rise, and each has a middle inside it', () => {
+  const mids = SHARE_BANDS.map((b) => b.mid);
+  assert.deepEqual(mids, [...mids].sort((a, b) => a - b));
+  assert.ok(SHARE_BANDS.length >= 2 && SHARE_BANDS.length <= 10, 'the API takes 2 to 10 levels');
+  assert.ok(mids[0] > 0 && mids.at(-1) < 1);
+});
+
+test('a group is the reviews, numbered, with the game named, and nothing else about them', () => {
+  assert.equal(buildGroupState('Deep Rock Galactic', ['  good  ', 'Great co-op']), '2 Steam reviews of Deep Rock Galactic, numbered:\n\n1. good\n2. Great co-op');
+  assert.equal(buildGroupState(null, ['x']), '1 Steam reviews of a game, numbered:\n\n1. x');
+  assert.doesNotMatch(buildGroupState('X', ['fine']), /thumb|hours|helpful|voted/i);
+});
+
+test('a long review is cut for a group, and a short one is left', () => {
+  assert.equal(clipForGroup('short'), 'short');
+  const clipped = clipForGroup('word '.repeat(400));
+  assert.ok(clipped.length <= GROUP_REVIEW_MAX_CHARS);
+  assert.ok(clipped.endsWith('…'));
+});
+
+test('reviews are cut into groups of a size, and the last is what is left', () => {
+  const reviews = Array.from({ length: 120 }, (_, i) => i);
+  assert.deepEqual(chunkReviews(reviews, 50).map((g) => g.length), [50, 50, 20]);
+  assert.deepEqual(chunkReviews(reviews, 25).length, 5);
+  assert.deepEqual(chunkReviews([], 50), []);
+  assert.deepEqual(chunkReviews(reviews, 50).flat(), reviews, 'nothing lost or repeated');
+});
+
+test('a share is worked out from the bands Jev spreads its answer over, weighted, and does not need them to add up to one', () => {
+  assert.equal(shareFromAnswer(bandAnswer(0)), SHARE_BANDS[0].mid);
+  assert.equal(shareFromAnswer(bandAnswer(5)), SHARE_BANDS[5].mid);
+  const half = { probabilities: { 2: 0.5, 4: 0.5 } };
+  assert.ok(Math.abs(shareFromAnswer(half) - (SHARE_BANDS[2].mid + SHARE_BANDS[4].mid) / 2) < 1e-9);
+  const unnormalised = { probabilities: { 2: 1, 4: 1 } };
+  assert.ok(Math.abs(shareFromAnswer(unnormalised) - shareFromAnswer(half)) < 1e-9, 'only the proportions matter');
+});
+
+test('with no probabilities the share comes from the score, between the two bands it lies between; with neither there is none', () => {
+  assert.equal(shareFromAnswer({ score: 2 }), SHARE_BANDS[2].mid);
+  const between = shareFromAnswer({ score: 2.5 });
+  assert.ok(between > SHARE_BANDS[2].mid && between < SHARE_BANDS[3].mid);
+  assert.equal(shareFromAnswer({ score: 99 }), SHARE_BANDS.at(-1).mid, 'a score off the end is the top band');
+  assert.equal(shareFromAnswer({}), null);
+  assert.equal(shareFromAnswer(undefined), null);
+  assert.equal(shareFromAnswer({ probabilities: { 0: 0, 1: 0 } }), null, 'all zero says nothing');
+});
+
+test('group counts are estimates of reviews: the share times the size of the group, added up over the groups', () => {
+  const rows = [groupRow(0, 50, { pay_to_win: [0, 3] }), groupRow(1, 50, { pay_to_win: [0, 3] }), groupRow(2, 20, { pay_to_win: [0, 3] })];
+  const tally = groupTallyRows(rows);
+  assert.deepEqual([tally.groups, tally.reviews, tally.failed, tally.tokens], [3, 120, 0, 3000]);
+  const p2w = tally.topics.pay_to_win;
+  assert.equal(p2w.reviews, 120);
+  assert.ok(Math.abs(p2w.bad - 120 * SHARE_BANDS[3].mid) < 1e-9, 'a band of 20-40% in every group, so about 30% of 120 reviews');
+  assert.ok(Math.abs(p2w.good - 120 * SHARE_BANDS[0].mid) < 1e-9);
+  assert.equal(tally.topics.difficulty.reviews, 0, 'a topic that was not asked is not counted');
+});
+
+test('two shares that add to more than everyone are scaled down, so a topic never counts more reviews than the group has', () => {
+  const tally = groupTallyRows([groupRow(0, 50, { pay_to_win: [5, 5] })]);
+  const { good, bad } = tally.topics.pay_to_win;
+  assert.ok(good + bad <= 50 + 1e-9);
+  assert.ok(Math.abs(good - bad) < 1e-9, 'in the same proportion as they were given');
+});
+
+test('a failed group is counted with its reviews, an unanswered one is not, and an answer that is missing is skipped', () => {
+  const rows = [groupRow(0, 50, { positive: [4, 1] }), { index: 1, size: 50, texts: [], status: 'error', error: 'boom' }, { index: 2, size: 50, texts: [], status: 'pending' }, groupRow(3, 30, {}, { response: { answers: { positive_good: bandAnswer(4) }, usage: { input_tokens: 1, output_tokens: 1 } } })];
+  const tally = groupTallyRows(rows);
+  assert.deepEqual([tally.groups, tally.reviews, tally.failed, tally.failedReviews], [2, 80, 1, 50]);
+  assert.equal(tally.topics.positive.reviews, 50, 'the group with only one of the two answers says nothing about the topic');
+});
+
+test('group tallies add up across batches like the others do, changing neither, and cope with one that is missing or partial', () => {
+  const a = groupTallyRows([groupRow(0, 50, { pay_to_win: [0, 3] })]);
+  const b = groupTallyRows([groupRow(0, 50, { pay_to_win: [1, 2] }), groupRow(1, 50, { pay_to_win: [1, 2] })]);
+  const before = JSON.stringify(a);
+  const together = mergeGroupTallies(a, b);
+  assert.equal(JSON.stringify(a), before);
+  assert.deepEqual(together, groupTallyRows([groupRow(0, 50, { pay_to_win: [0, 3] }), groupRow(1, 50, { pay_to_win: [1, 2] }), groupRow(2, 50, { pay_to_win: [1, 2] })]));
+  assert.deepEqual(mergeGroupTallies(a, null), a);
+  assert.deepEqual(mergeGroupTallies(emptyGroupTally(), { groups: 2 }).groups, 2);
+  assert.deepEqual(mergeGroupTallies(emptyGroupTally(), JSON.parse(JSON.stringify(together))), together, 'and survive being stored');
+});
+
+test('the summary of groups has the fields of the summary of reviews, so the same cards show it, and says it is an estimate', () => {
+  const tally = groupTallyRows(Array.from({ length: 4 }, (_, i) => groupRow(i, 50, { pay_to_win: [1, 4], positive: [4, 1] })));
+  const groups = summarizeTally(tallyRows(rowsOf('story', { good_story: 12, not_mentioned: 8 })));
+  const guess = summarizeGroupTally(tally);
+  assert.equal(guess.approximate, true);
+  assert.equal(groups.approximate, undefined);
+  assert.deepEqual(Object.keys(guess.topics[0]).sort(), Object.keys(groups.topics[0]).sort(), 'every field a card reads is there');
+  assert.equal(guess.answered, 200);
+  assert.deepEqual(guess.platforms, [], 'performance by platform needs each review on its own');
+
+  const p2w = guess.topics.find((t) => t.id === 'pay_to_win');
+  assert.deepEqual(p2w.options.map((o) => [o.tone, o.label]), [['good', 'Not pay to win'], ['bad', 'Pay to win']]);
+  assert.ok(Math.abs(p2w.share - p2w.bad / (p2w.good + p2w.bad)) < 1e-12, 'the headline share is among the reviews that take a side, as for reviews read one by one');
+  assert.equal(p2w.tooFew, false);
+  assert.equal(p2w.tone, 'bad', 'a lot more say it is pay to win than not');
+  assert.equal(guess.topics.find((t) => t.id === 'difficulty').tooFew, true, 'not asked, so no card');
+});
+
+test('a topic needs enough mentions in an estimate too, counted as the reviews it puts on a side', () => {
+  const few = summarizeGroupTally(groupTallyRows([groupRow(0, 50, { pay_to_win: [0, 0] })])).topics.find((t) => t.id === 'pay_to_win');
+  assert.equal(few.tooFew, true, 'about one review on a side is not enough for a percentage');
+  assert.equal(few.tone, 'none');
+  const many = summarizeGroupTally(groupTallyRows([groupRow(0, 50, { pay_to_win: [1, 3] })])).topics.find((t) => t.id === 'pay_to_win');
+  assert.equal(many.tooFew, false);
+});
+
+test('grouped cards go through the same rules for what is shown: nothing without enough data, and headings with nothing under them are dropped', () => {
+  const guess = summarizeGroupTally(groupTallyRows(Array.from({ length: 3 }, (_, i) => groupRow(i, 50, { positive: [4, 1] }))));
+  const { groups, hidden } = visibleGroups(guess);
+  assert.deepEqual(groups.map((g) => g.id), ['overall']);
+  assert.deepEqual(groups[0].topics.map((t) => t.id), ['positive']);
+  assert.equal(hidden, 0);
+});
+
+/* ---------- what it costs ---------- */
+
+test('fewer questions cost less, groups cost far less, and bigger groups less again', () => {
+  const each = tokensPerReviewEstimate({});
+  const eachSix = tokensPerReviewEstimate({ topics: SIX });
+  assert.ok(eachSix < each / 2, `${eachSix} against ${each}`);
+  const g25 = tokensPerReviewEstimate({ grouped: true, groupSize: 25 });
+  const g50 = tokensPerReviewEstimate({ grouped: true, groupSize: 50 });
+  const g100 = tokensPerReviewEstimate({ grouped: true, groupSize: 100 });
+  assert.ok(g25 > g50 && g50 > g100, `${g25} > ${g50} > ${g100}`);
+  assert.ok(each / g50 > 15, `groups of 50 are ${(each / g50).toFixed(0)} times cheaper`);
+  assert.ok(tokensPerReviewEstimate({ grouped: true, groupSize: 50, topics: SIX }) < g50);
+});
+
+test('the estimate agrees with what the original six questions really cost, 1,167 tokens a review on a real run', () => {
+  assert.ok(Math.abs(tokensPerReviewEstimate({ topics: SIX }) - 1167) <= 25, String(tokensPerReviewEstimate({ topics: SIX })));
+  assert.ok(Math.abs(tokensPerReviewEstimate({}) - 3200) <= 100, 'and with every question it is about what the page always assumed');
+});
+
+/* ---------- saving and carrying on with these settings ---------- */
+
+test('saving keeps which questions are on and how reviews are grouped, and carrying on puts them back', () => {
+  const slice = sliceWith(null, { topics: SIX, grouped: true, groupSize: 25 });
+  const restored = fieldsFromSaved(JSON.parse(JSON.stringify(snapshotOf(slice))));
+  assert.deepEqual(restored.topics, SIX);
+  assert.equal(restored.grouped, true);
+  assert.equal(restored.groupSize, 25);
+  const older = fieldsFromSaved({ url: 'u', sort: 'recent', count: 50 });
+  assert.deepEqual([older.topics.length, older.grouped, older.groupSize], [STEAM_QUESTION_IDS.length, false, 50], 'an older save has every question on and no grouping');
+  assert.deepEqual(fieldsFromSaved({ topics: ['pay_to_win', 'made_up'] }).topics, ['pay_to_win'], 'a question that no longer exists is dropped');
+});
+
+test('a finished batch of groups has no table, so saving folds it into the group counts and keeps no rows', () => {
+  const rows = [groupRow(0, 50, { pay_to_win: [1, 3] }), groupRow(1, 50, { pay_to_win: [1, 3] })];
+  const before = groupTallyRows([groupRow(9, 50, { pay_to_win: [1, 3] })]);
+  const slice = sliceWith({ kind: 'steamgroup', rows }, { grouped: true, gtally: before });
+  const snap = snapshotOf(slice);
+  assert.equal(snap.run, null);
+  assert.equal(snap.gtally.reviews, 150, 'the earlier batches and the one on screen');
+  assert.equal(savedGroupTotal(snap).reviews, 150);
+  assert.equal(savedTotal(snap).answered, slice.tally.answered, 'and the reviews read one by one are untouched');
+});
+
+test('a batch of groups stopped part way is kept, so the groups not yet asked about are not lost, and nothing is counted twice', () => {
+  const rows = [groupRow(0, 50, { pay_to_win: [1, 3] }), { index: 1, size: 50, texts: ['a'], status: 'pending' }, { index: 2, size: 50, texts: ['b'], status: 'running' }];
+  const slice = sliceWith({ kind: 'steamgroup', rows }, { grouped: true });
+  const snap = snapshotOf(slice);
+  assert.equal(snap.run.rows.length, 3);
+  assert.deepEqual(snap.run.rows.map((r) => r.status), ['ok', 'pending', 'pending']);
+  assert.equal(snap.gtally.reviews, 0, 'the earlier batches only');
+  assert.equal(savedGroupTotal(snap).reviews, 50, 'plus the group on screen that was answered');
+  assert.equal(savedTally(snap).answered, slice.tally.answered, 'group rows are never counted as reviews read one by one');
+
+  const restored = fieldsFromSaved(JSON.parse(JSON.stringify(snap)));
+  assert.equal(restored.run.kind, 'steamgroup');
+  assert.equal(mergeGroupTallies(restored.gtally, groupTallyRows(restored.run.rows)).reviews, 50);
+  assert.equal(restored.tally.answered, slice.tally.answered);
+});
+
+test('a saved analysis that read reviews both ways keeps both counts, and neither is lost when the batch cannot be read back', () => {
+  const groupsDone = groupTallyRows([groupRow(0, 50, { pay_to_win: [1, 3] })]);
+  const slice = sliceWith({ kind: 'steam', rows: rowsOf('story', { weak_story: 4, not_mentioned: 6 }) }, { gtally: groupsDone });
+  const snap = snapshotOf(slice);
+  const { run, ...record } = snap;
+  record.total = savedTally(snap);
+  record.gtotal = savedGroupTally(snap);
+  const restored = fieldsFromSaved(record, null);
+  assert.equal(restored.run, null);
+  assert.equal(restored.tally.answered, 30);
+  assert.equal(restored.gtally.reviews, 50);
 });

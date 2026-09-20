@@ -6,10 +6,6 @@ export const MAX_REVIEW_CHARS = 3000; // Steam allows 8000; longer text costs to
 // thousands of them never has to be held all at once. This is the most one request to the server returns.
 export const STEAM_MAX_BATCH = 500;
 export const STEAM_BATCH_SIZES = [50, 100, 200, 500];
-// A first guess at what each review costs, until a batch has run and the page can use the real figure. The original six
-// questions measured 1,167 tokens per review on a real 500-review run; the questions asked since add about 1,600 tokens of
-// question text (a quarter of a token per character) and a short answer each, and the facts about the reviewer about 60.
-export const TOKENS_PER_REVIEW = 3200;
 export const STEAM_SORTS = { recent: 'Most recent', helpful: 'Most helpful' };
 export const MIN_MENTIONS = 10; // a share of fewer mentions than this is anecdote: the page leaves that card out
 
@@ -248,30 +244,43 @@ export const STEAM_PLATFORM = {
   absent: 'Does not say what they play on',
 };
 
-/** The questions Jev is asked about every review, in the request shape. Built from the topics, so the two cannot disagree. */
-export function steamQuestions() {
+/** Every question the page can switch on and off: each topic, and the platform question (which is only useful with performance). */
+export const STEAM_QUESTION_IDS = [...STEAM_TOPICS.map((t) => t.id), STEAM_PLATFORM.id];
+
+// `enabled` is the ids switched on; null means every one of them.
+const wanted = (enabled, id) => enabled == null || enabled.includes(id);
+
+/** Which questions are on, as a short string, to tell whether two batches were asked the same things. */
+export const questionSignature = (enabled = null) => STEAM_QUESTION_IDS.filter((id) => wanted(enabled, id)).join(',');
+
+/** The questions Jev is asked about every review, in the request shape, for the topics that are on. Built from the topics, so the two cannot disagree. */
+export function steamQuestions(enabled = null) {
   const questions = {};
   for (const t of STEAM_TOPICS) {
+    if (!wanted(enabled, t.id)) continue;
     questions[t.id] =
       t.type === 'noul'
         ? { type: 'noul', instructions: t.question, criteria: { true: t.options[0].note, false: t.options[1].note } }
         : { type: 'choice', instructions: t.question, criteria: { ...Object.fromEntries(t.options.map((o) => [o.key, o.note])), [NOT_MENTIONED]: t.absent } };
   }
-  questions[STEAM_PLATFORM.id] = {
-    type: 'choice',
-    instructions: STEAM_PLATFORM.question,
-    criteria: { ...Object.fromEntries(STEAM_PLATFORM.options.map((o) => [o.key, o.note])), [NOT_MENTIONED]: STEAM_PLATFORM.absent },
-  };
+  if (wanted(enabled, STEAM_PLATFORM.id)) {
+    questions[STEAM_PLATFORM.id] = {
+      type: 'choice',
+      instructions: STEAM_PLATFORM.question,
+      criteria: { ...Object.fromEntries(STEAM_PLATFORM.options.map((o) => [o.key, o.note])), [NOT_MENTIONED]: STEAM_PLATFORM.absent },
+    };
+  }
   return questions;
 }
 
 /** Which questions count toward a composite score by default: only overall positivity (the rest are Choices to opt into). */
-export function steamSpecs() {
+export function steamSpecs(enabled = null) {
   const specs = {};
   for (const t of STEAM_TOPICS) {
+    if (!wanted(enabled, t.id)) continue;
     specs[t.id] = t.type === 'noul' ? { enabled: true, weight: 100, invert: false, target: null } : { enabled: false, weight: 50, invert: false, target: t.options.find((o) => o.tone === 'good').key };
   }
-  specs[STEAM_PLATFORM.id] = { enabled: false, weight: 50, invert: false, target: STEAM_PLATFORM.options[0].key };
+  if (wanted(enabled, STEAM_PLATFORM.id)) specs[STEAM_PLATFORM.id] = { enabled: false, weight: 50, invert: false, target: STEAM_PLATFORM.options[0].key };
   return specs;
 }
 
@@ -454,8 +463,8 @@ export function summarizeTally(tally) {
 
 /**
  * What the summary shows: the topics grouped under their headings, with every card that has too little data left out,
- * and any heading left with nothing under it left out too. `hidden` is how many topics were left out, so the page can
- * say why some are missing. Performance by platform sits in Technical, one row per platform with enough to go on.
+ * and any heading left with nothing under it left out too. `hidden` is how many topics that were asked about were left out
+ * for too little data (a topic that is switched off was never asked, so it is not counted), so the page can say why some are missing. Performance by platform sits in Technical, one row per platform with enough to go on.
  */
 export function visibleGroups(summary) {
   const groups = STEAM_GROUPS.map((g) => ({
@@ -463,7 +472,7 @@ export function visibleGroups(summary) {
     topics: summary.topics.filter((t) => t.group === g.id && !t.tooFew),
     platforms: g.id === 'technical' ? summary.platforms.filter((p) => !p.tooFew) : [],
   })).filter((g) => g.topics.length > 0 || g.platforms.length > 0);
-  return { groups, hidden: summary.topics.filter((t) => t.tooFew).length };
+  return { groups, hidden: summary.topics.filter((t) => t.tooFew && t.answered > 0).length };
 }
 
 /** The summary for one run's rows: the same as a tally of them, plus how many rows there are. */
@@ -524,20 +533,30 @@ export function rowHasAnswer(row, topicId, optionKey) {
   return row.status === 'ok' && Boolean(topic) && Boolean(answer) && answerKey(topic, answer) === optionKey;
 }
 
+const isGroupRun = (run) => run?.kind === 'steamgroup';
+const isRunUnfinished = (run) => Boolean(run?.rows.some((r) => r.status !== 'ok' && r.status !== 'error'));
+
 /**
- * What to keep of the Steam page so the analysis can be looked at, or carried on, later: which game and how, where the
- * next batch starts, the counts for the batches before this one, and the batch on screen with its reviews, so a saved
- * page can show its table. The page is not changed. The batch is big (about 4 KB a review), so whoever saves this keeps
- * it apart from the small rest, in the browser's database; see savedTotal for reading the counts without it.
+ * What to keep of the Steam page so the analysis can be looked at, or carried on, later: which game and how, which
+ * questions and whether reviews were grouped, where the next batch starts, the counts for the batches before this one,
+ * and the batch on screen with its reviews, so a saved page can show its table. The page is not changed. A per-review batch
+ * is big (about 4 KB a review), so whoever saves this keeps it apart from the small rest, in the browser's database; see
+ * savedTotal for reading the counts without it. A batch of groups has no table, so a finished one is folded into the
+ * group counts; an unfinished one is kept, because the groups not yet asked about are already behind the cursor.
  */
 export function snapshotOf(slice) {
-  const run = slice.run ? structuredClone(slice.run) : null;
+  const grouped = isGroupRun(slice.run);
+  const keep = Boolean(slice.run) && (!grouped || isRunUnfinished(slice.run));
+  const run = keep ? structuredClone(slice.run) : null;
   if (run) for (const row of run.rows) if (row.status === 'running') row.status = 'pending'; // nothing is running in a saved copy
   return {
     url: slice.url,
     sort: slice.sort,
     count: slice.count,
     tellThumbs: slice.tellThumbs,
+    topics: [...slice.topics],
+    grouped: slice.grouped === true,
+    groupSize: slice.groupSize,
     game: slice.game,
     summary: slice.summary,
     key: slice.key,
@@ -545,19 +564,24 @@ export function snapshotOf(slice) {
     exhausted: slice.exhausted,
     batches: slice.batches,
     tally: mergeTallies(emptyTally(), slice.tally), // the batches before the one on screen
+    gtally: grouped && !keep ? mergeGroupTallies(slice.gtally, groupTallyRows(slice.run.rows)) : mergeGroupTallies(emptyGroupTally(), slice.gtally),
     run,
   };
 }
 
 /** Counts for everything a saved analysis holds here: the earlier batches, plus the batch it holds inline, if it has one. */
-export const savedTally = (saved) => mergeTallies(saved.tally, saved.run ? tallyRows(saved.run.rows) : null);
+export const savedTally = (saved) => mergeTallies(saved.tally, saved.run && !isGroupRun(saved.run) ? tallyRows(saved.run.rows) : null);
+
+/** The same for reviews analysed in groups: the earlier batches, plus an unfinished batch of groups held inline. */
+export const savedGroupTally = (saved) => mergeGroupTallies(saved.gtally, isGroupRun(saved.run) ? groupTallyRows(saved.run.rows) : null);
 
 /**
  * The counts to show for a saved analysis, all batches included. A saved analysis keeps its batch in the browser's
- * database, away from its small record, so the record carries the total worked out at the time it was saved (`total`).
- * Older ones did not, and are worked out from what they hold.
+ * database, away from its small record, so the record carries the totals worked out at the time it was saved (`total` for
+ * reviews analysed one by one, `gtotal` for groups). Older ones did not, and are worked out from what they hold.
  */
 export const savedTotal = (saved) => (saved.total ? mergeTallies(emptyTally(), saved.total) : savedTally(saved));
+export const savedGroupTotal = (saved) => (saved.gtotal ? mergeGroupTallies(emptyGroupTally(), saved.gtotal) : savedGroupTally(saved));
 
 /**
  * The parts of a saved analysis to put back on the Steam page to carry on. `run` is its batch, read from the database;
@@ -566,18 +590,23 @@ export const savedTotal = (saved) => (saved.total ? mergeTallies(emptyTally(), s
  */
 export function fieldsFromSaved(saved, run = null) {
   const kept = run ?? saved.run ?? null; // older saves kept an unfinished batch inline
+  const keptGroups = isGroupRun(kept);
   return {
     url: saved.url,
     sort: saved.sort,
     count: saved.count,
     tellThumbs: saved.tellThumbs === true,
+    topics: Array.isArray(saved.topics) ? saved.topics.filter((id) => STEAM_QUESTION_IDS.includes(id)) : [...STEAM_QUESTION_IDS],
+    grouped: saved.grouped === true,
+    groupSize: STEAM_GROUP_SIZES.includes(saved.groupSize) ? saved.groupSize : 50,
     game: saved.game ?? null,
     summary: saved.summary ?? null,
     key: saved.key ?? null,
     cursor: typeof saved.cursor === 'string' ? saved.cursor : '*',
     exhausted: saved.exhausted === true,
     batches: Number.isInteger(saved.batches) ? saved.batches : 0,
-    tally: kept ? mergeTallies(emptyTally(), saved.tally) : savedTotal(saved),
+    tally: kept && !keptGroups ? mergeTallies(emptyTally(), saved.tally) : savedTotal(saved),
+    gtally: kept && keptGroups ? mergeGroupTallies(emptyGroupTally(), saved.gtally) : savedGroupTotal(saved),
     run: kept ? structuredClone(kept) : null,
   };
 }
@@ -630,3 +659,208 @@ export function steamFilterChoices({ batches = 1, where = 'this one' } = {}) {
     items: topic.options.map((option) => ({ label: option.label, filter: steamFilter(topic, option, { batches, where }) })),
   }));
 }
+
+/* ---------- grouping reviews: many in one request, for a fraction of the cost ---------- */
+
+export const STEAM_GROUP_SIZES = [25, 50, 100];
+export const GROUP_REVIEW_MAX_CHARS = 500; // a review inside a group is cut here: a few very long ones would cost more than all the rest
+
+// What things cost, in tokens, for the estimates. Measured on 300 real reviews of one game: a review sent on its own,
+// with its facts and header, was 78 tokens; a review's text was 32 on average (the median was 7), plus a few to number it.
+export const REVIEW_STATE_TOKENS = 80;
+export const GROUP_REVIEW_TOKENS = 40;
+export const OUTPUT_TOKENS_PER_QUESTION = 15;
+// What a request costs beyond the text in it. The original six questions measured 1,167 tokens per review on a real
+// 500-review run, and their text and answers add up to about 680, so this is the difference. It is charged once per
+// request, so per review when they are read one by one and once per group when they are grouped (an assumption).
+export const REQUEST_OVERHEAD_TOKENS = 485;
+
+/**
+ * The bands a share of a group is asked about, and the middle of each, which turns Jev's probabilities across the bands
+ * into a number. With 50 reviews the bands are roughly 0-1 reviews, 2-4, 5-10, 11-20, 21-35 and 36-50.
+ */
+export const SHARE_BANDS = [
+  { label: '0-2%', mid: 0.005 },
+  { label: '2-8%', mid: 0.05 },
+  { label: '8-20%', mid: 0.14 },
+  { label: '20-40%', mid: 0.3 },
+  { label: '40-70%', mid: 0.55 },
+  { label: '70-100%', mid: 0.85 },
+];
+
+/**
+ * The questions for a group of reviews. Each topic is two questions: what share of the reviews take a side that is good
+ * for the game, and what share take one that is bad, each answered as one of the bands above. The share among the
+ * reviews that mention the topic is worked out from the two, as the cards do for reviews read one by one.
+ */
+export function steamGroupQuestions(enabled = null) {
+  const questions = {};
+  for (const t of STEAM_TOPICS) {
+    if (!wanted(enabled, t.id)) continue;
+    for (const tone of ['good', 'bad']) {
+      const notes = t.options.filter((o) => o.tone === tone).map((o) => o.note);
+      questions[`${t.id}_${tone}`] = {
+        type: 'score',
+        instructions: `What share of the reviews below match ${notes.length > 1 ? 'any of these' : 'this'}: ${notes.map((n) => `"${n}"`).join(' or ')}?`,
+        criteria: SHARE_BANDS.map((b) => b.label),
+      };
+    }
+  }
+  return questions;
+}
+
+/** A review, cut short for a group. */
+export const clipForGroup = (text) => (text.length > GROUP_REVIEW_MAX_CHARS ? `${text.slice(0, GROUP_REVIEW_MAX_CHARS - 1).trimEnd()}…` : text);
+
+/** What Jev reads for a group: the reviews, numbered, and nothing else about them (the questions are about the group). */
+export function buildGroupState(gameName, texts) {
+  return `${texts.length} Steam reviews of ${gameName?.trim() || 'a game'}, numbered:\n\n${texts.map((text, i) => `${i + 1}. ${text.trim()}`).join('\n')}`;
+}
+
+/** Reviews in groups of `size`; the last group is whatever is left. */
+export function chunkReviews(reviews, size) {
+  const groups = [];
+  for (let i = 0; i < reviews.length; i += size) groups.push(reviews.slice(i, i + size));
+  return groups;
+}
+
+/**
+ * The share of a group that an answer to a share question says, from Jev's probabilities across the bands: the middles
+ * of the bands, weighted by them. Null if the answer has neither probabilities nor a score.
+ */
+export function shareFromAnswer(answer) {
+  const probabilities = answer?.probabilities;
+  if (probabilities) {
+    let total = 0;
+    let sum = 0;
+    SHARE_BANDS.forEach((band, i) => {
+      const p = Number(probabilities[String(i)]) || 0;
+      total += p;
+      sum += p * band.mid;
+    });
+    if (total > 0) return sum / total;
+  }
+  if (typeof answer?.score === 'number') {
+    const low = Math.max(0, Math.min(SHARE_BANDS.length - 1, Math.floor(answer.score)));
+    const high = Math.min(low + 1, SHARE_BANDS.length - 1);
+    const f = Math.max(0, Math.min(1, answer.score - low));
+    return SHARE_BANDS[low].mid * (1 - f) + SHARE_BANDS[high].mid * f;
+  }
+  return null;
+}
+
+/**
+ * Counts for reviews analysed in groups, like a tally is for reviews read one by one, but of estimates: for each topic,
+ * how many reviews were covered and, added up over the groups, roughly how many took a side good for the game and how
+ * many took one bad for it. They are fractions of a review, because they come from shares.
+ */
+export const emptyGroupTally = () => ({
+  groups: 0,
+  failed: 0, // groups whose request failed
+  reviews: 0, // reviews in the groups that were answered
+  failedReviews: 0,
+  tokens: 0,
+  topics: Object.fromEntries(STEAM_TOPICS.map((t) => [t.id, { reviews: 0, good: 0, bad: 0 }])),
+});
+
+/** What some group rows (`size` reviews each, and Jev's answers) amount to. */
+export function groupTallyRows(rows) {
+  const tally = emptyGroupTally();
+  for (const row of rows) {
+    const size = row.size ?? row.texts?.length ?? 0;
+    if (row.status === 'error') {
+      tally.failed++;
+      tally.failedReviews += size;
+    }
+    if (row.status !== 'ok') continue;
+    tally.groups++;
+    tally.reviews += size;
+    if (row.response?.usage) tally.tokens += row.response.usage.input_tokens + row.response.usage.output_tokens;
+    for (const t of STEAM_TOPICS) {
+      const good = shareFromAnswer(row.response?.answers?.[`${t.id}_good`]);
+      const bad = shareFromAnswer(row.response?.answers?.[`${t.id}_bad`]);
+      if (good == null || bad == null) continue;
+      const scale = good + bad > 1 ? 1 / (good + bad) : 1; // the two answers are given separately, so they can add to more than everyone
+      const counts = tally.topics[t.id];
+      counts.reviews += size;
+      counts.good += good * scale * size;
+      counts.bad += bad * scale * size;
+    }
+  }
+  return tally;
+}
+
+/** Two group tallies added together. Neither is changed, and one with fields missing counts what it has. */
+export function mergeGroupTallies(a, b) {
+  const merged = emptyGroupTally();
+  for (const t of [a, b]) {
+    if (!t) continue;
+    for (const key of ['groups', 'failed', 'reviews', 'failedReviews', 'tokens']) merged[key] += t[key] ?? 0;
+    for (const [id, into] of Object.entries(merged.topics)) {
+      const from = t.topics?.[id];
+      for (const key of ['reviews', 'good', 'bad']) into[key] += from?.[key] ?? 0;
+    }
+  }
+  return merged;
+}
+
+/**
+ * The same summary as for reviews read one by one, with the same fields on each topic, so the same cards can show it, but
+ * of estimates (`approximate` is true, and the cards say so). There is no per-option count, only the side good for the
+ * game and the side bad for it, and no performance by platform, which needs each review's own answers.
+ */
+export function summarizeGroupTally(tally) {
+  const side = (t, tone) => t.options.filter((o) => o.tone === tone).map((o) => o.label).join(' or ');
+  const topics = STEAM_TOPICS.map((t) => {
+    const c = tally.topics[t.id];
+    const mentioned = c.good + c.bad;
+    const goodShare = mentioned > 0 ? c.good / mentioned : null;
+    const tooFew = mentioned < MIN_MENTIONS;
+    return {
+      ...t,
+      options: [
+        { key: 'good', tone: 'good', label: side(t, 'good'), note: '', n: c.good },
+        { key: 'bad', tone: 'bad', label: side(t, 'bad'), note: '', n: c.bad },
+      ],
+      answered: c.reviews,
+      mentioned,
+      good: c.good,
+      bad: c.bad,
+      neutral: 0,
+      goodShare,
+      share: mentioned > 0 ? (t.headline === 'good' ? c.good : c.bad) / mentioned : null,
+      mentionShare: c.reviews > 0 ? mentioned / c.reviews : null,
+      tooFew,
+      tone: tooFew ? 'none' : toneFor(goodShare),
+    };
+  });
+  return { answered: tally.reviews, groups: tally.groups, failed: tally.failed, tokens: tally.tokens, topics, platforms: [], approximate: true };
+}
+
+/**
+ * Roughly what one review costs in tokens with these questions on, from the size of the questions. With reviews read one
+ * by one that is the questions, sent again for every review, plus the review and a short answer to each; in groups the
+ * questions are sent once per group, so it is that shared out over the reviews in it. Replaced by what is measured once
+ * some have been read.
+ */
+export function tokensPerReviewEstimate({ topics = null, grouped = false, groupSize = 50 } = {}) {
+  if (!grouped) {
+    const questions = steamQuestions(topics);
+    return Math.round(JSON.stringify(questions).length / 4 + REVIEW_STATE_TOKENS + Object.keys(questions).length * OUTPUT_TOKENS_PER_QUESTION + REQUEST_OVERHEAD_TOKENS);
+  }
+  const questions = steamGroupQuestions(topics);
+  return Math.round((JSON.stringify(questions).length / 4 + groupSize * GROUP_REVIEW_TOKENS + Object.keys(questions).length * OUTPUT_TOKENS_PER_QUESTION + REQUEST_OVERHEAD_TOKENS) / groupSize);
+}
+
+/** What Steam holds about a review that is kept with its row: for the line under it in the table, and for what Jev is told about the reviewer. */
+export const reviewMeta = (review) => ({
+  votedUp: review.votedUp,
+  hoursTotal: review.hoursTotal,
+  hoursAtReview: review.hoursAtReview,
+  hoursRecent: review.hoursRecent,
+  votesUp: review.votesUp,
+  refunded: review.refunded,
+  freeCopy: review.freeCopy,
+  earlyAccess: review.earlyAccess,
+  steamDeck: review.steamDeck,
+});

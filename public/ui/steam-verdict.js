@@ -1,34 +1,37 @@
 import { h } from '../dom.js';
 import { bar, pct } from '../results.js';
-import { MIN_MENTIONS, summarizeTally, visibleGroups } from '../lib/steam.js';
+import { MIN_MENTIONS, summarizeGroupTally, summarizeTally, visibleGroups } from '../lib/steam.js';
 
 const number = (n) => n.toLocaleString('en-US');
 const plural = (n, word) => `${number(n)} ${word}${n === 1 ? '' : 's'}`;
+const EMPTY = 'This fills in as Jev reads the reviews: for each topic, how many reviews mention it and what they say.';
 
 /**
  * Every option's count, the side the title names first, so "Pay to win: 0" sits beside a 0%. Where there is a table to
  * filter (`onPick` is given), a count above zero is a button that shows the reviews behind it; a zero has nothing to show.
+ * With `approximate` the counts are estimates: they are rounded and marked, and there is nothing to click.
  */
-function counts(t, onPick) {
+function counts(t, onPick, approximate) {
   const first = t.options.filter((o) => o.tone === t.headline);
   const rest = t.options.filter((o) => o.tone !== t.headline);
   const parts = [...first, ...rest].map((o) => {
-    const text = `${o.label}: ${number(o.n)}`;
-    if (!onPick || o.n === 0) return text;
+    const text = approximate ? `${o.label}: ≈ ${number(Math.round(o.n))}` : `${o.label}: ${number(o.n)}`;
+    if (!onPick || approximate || o.n === 0) return text;
     return h('button', { type: 'button', class: 'steam-pick', title: `Show the reviews that say this: ${o.note}`, onclick: () => onPick(t, o) }, text);
   });
   return h('p', { class: 'small' }, parts.flatMap((part, i) => (i ? [' · ', part] : [part])));
 }
 
-function topicCard(t, onPick) {
+function topicCard(t, onPick, approximate) {
   const everyone = t.type === 'noul'; // "Positive" is asked of every review; the others only count the reviews that bring the topic up
+  const mentions = approximate ? `≈ ${number(Math.round(t.mentioned))}` : number(t.mentioned);
   return h(
     'article',
     { class: `ov-card tone-${t.tone}`, 'data-topic': t.id },
-    h('header', { class: 'a-head' }, h('h3', {}, t.label), h('span', { class: 'tag' }, everyone ? 'every review' : `${number(t.mentioned)} of ${number(t.answered)} mention it`)),
-    h('div', { class: 'steam-share' }, h('strong', { class: 'steam-share-value' }, pct(t.share)), h('span', { class: 'muted' }, t.says)),
+    h('header', { class: 'a-head' }, h('h3', {}, t.label), h('span', { class: 'tag' }, everyone ? 'every review' : `${mentions} of ${number(t.answered)} mention it`)),
+    h('div', { class: 'steam-share' }, h('strong', { class: 'steam-share-value' }, `${approximate ? '≈ ' : ''}${pct(t.share)}`), h('span', { class: 'muted' }, t.says)),
     bar(t.share),
-    counts(t, onPick),
+    counts(t, onPick, approximate),
   );
 }
 
@@ -57,19 +60,26 @@ function platformCard(rows) {
  * `tally` is the counts for every review read so far, across every batch (see mergeTallies); it is rebuilt each time,
  * so the cards appear and fill in as a run goes. `steamTotal` is how many reviews the game has, to say how much of it
  * this covers. `onPick(topic, option)` makes each count clickable, to show the reviews behind it.
+ *
+ * With `groups` the tally is of reviews read in groups (see mergeGroupTallies), so the cards are estimates: marked with
+ * a ≈, under a heading that says so, and with nothing to click. `emptyText` is what to say before there is anything to
+ * show; an empty string says nothing.
  */
-export function renderSteamVerdict(root, tally, { steamTotal = 0, onPick = null } = {}) {
-  const sum = tally ? summarizeTally(tally) : null;
-  if (!sum || sum.answered === 0) return root.replaceChildren(h('p', { class: 'muted' }, 'This fills in as Jev reads the reviews: for each topic, how many reviews mention it and what they say.'));
+export function renderSteamVerdict(root, tally, { steamTotal = 0, onPick = null, groups: grouped = false, emptyText = EMPTY } = {}) {
+  const sum = tally ? (grouped ? summarizeGroupTally(tally) : summarizeTally(tally)) : null;
+  if (!sum || sum.answered === 0) return root.replaceChildren(...(emptyText ? [h('p', { class: 'muted' }, emptyText)] : []));
 
   const { groups, hidden } = visibleGroups(sum);
   const of = steamTotal > 0 ? `, ${pct(Math.min(1, sum.answered / steamTotal))} of the ${number(steamTotal)} on Steam` : '';
-  const intro = `From the ${plural(sum.answered, 'review')} Jev has read so far${of}. A review that does not mention a topic is left out of that topic's percentage.${onPick ? ' Click a count to see those reviews.' : ''}`;
+  const intro = grouped
+    ? `Estimated from ${plural(sum.answered, 'review')} read in ${plural(sum.groups, 'group')}${of}. Jev was asked what share of each group says each thing, so these are approximate, and a review that does not mention a topic is left out of that topic's percentage.`
+    : `From the ${plural(sum.answered, 'review')} Jev has read so far${of}. A review that does not mention a topic is left out of that topic's percentage.${onPick ? ' Click a count to see those reviews.' : ''}`;
   const note = hidden > 0 ? `${plural(hidden, 'topic')} ${hidden === 1 ? 'is' : 'are'} not shown yet: fewer than ${MIN_MENTIONS} reviews mention ${hidden === 1 ? 'it' : 'them'}.` : '';
 
   root.replaceChildren(
+    ...(grouped ? [h('h3', { class: 'steam-estimate-title' }, 'Estimated from groups of reviews')] : []),
     h('p', { class: 'muted small' }, intro, note && ` ${note}`),
     ...(groups.length === 0 ? [h('p', { class: 'muted' }, `No topic has ${MIN_MENTIONS} reviews mentioning it yet. Cards appear as they do.`)] : []),
-    ...groups.map((g) => h('section', { class: 'steam-group', 'aria-label': g.label }, h('h3', { class: 'steam-group-title' }, g.label), h('div', { class: 'ov-cards' }, [...g.topics.map((t) => topicCard(t, onPick)), g.platforms.length > 0 ? platformCard(g.platforms) : null]))),
+    ...groups.map((g) => h('section', { class: 'steam-group', 'aria-label': g.label }, h('h3', { class: 'steam-group-title' }, g.label), h('div', { class: 'ov-cards' }, [...g.topics.map((t) => topicCard(t, onPick, grouped)), g.platforms.length > 0 ? platformCard(g.platforms) : null]))),
   );
 }
