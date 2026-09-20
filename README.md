@@ -83,15 +83,31 @@ has and shows that and Steam's own rating; this is free and uses no key. Reviews
   it, live, is what that costs: how many more reviews and requests, roughly how many tokens, and about how long at the
   speed so far. Nothing is spent until you press its button. It then runs batch after batch until it gets there (the last
   batch is cut short, so it stops at the chosen share and not past it), and you can press **Stop** at any time.
-- **It costs what it costs.** Jev is asked twenty-four questions about each review, in a separate request per review, and
-  the questions are most of the cost: a first guess is about 3,200 tokens a review, and after the first 20 reviews the
-  page uses what they actually cost. The popup shows the estimate for whatever you pick, and warns above 100 million
-  tokens. All of a 380,000-review game is on the order of a billion tokens, so pick a share and stop when the numbers
-  have settled.
+- **It costs what it costs.** By default Jev is asked all twenty-four questions about each review, in a separate request
+  per review, and the questions are most of the cost: a first guess is about 3,200 tokens a review, and after the first
+  20 reviews the page uses what they actually cost. The popup shows the estimate for whatever you pick, and warns above
+  100 million tokens. All of a 380,000-review game is on the order of a billion tokens, so pick a share and stop when the
+  numbers have settled, or use the two switches below to make it cheaper.
+- **Questions Jev is asked** is a fold-out under the link with a **checkbox for every question**, a heading checkbox for
+  each group, and presets (**All**, **The six basics**, **None**). Only the ticked questions are sent, so fewer questions
+  means fewer tokens (the six basics are about 1,200 tokens a review, against about 3,200 for all of them), and the line
+  above it shows the cost as you tick. The cards only cover questions that were on when a review was read, so switching one
+  on later covers the reviews read from then on. *Performance by platform* needs *Runs badly* and reviews read one by one,
+  so it is greyed out without it.
+- **Group reviews** is a checkbox with a group size (**25, 50 or 100**). Instead of one request per review, Jev gets a
+  whole group of reviews in one request and is asked what share of the group says each thing, which is about **30 times
+  cheaper** (roughly 110 tokens a review at 50 to a group, against about 3,200). The trade-offs, all shown on the page:
+  the cards are **estimates, marked ≈**, in their own section ("Estimated from groups of reviews"); there is **no table**
+  for reviews read this way, and no filtering by count; Steam's thumbs cannot be compared with Jev's reading, so there is
+  no accuracy check on them; and the shares are bands, not counts. You can mix the two in one analysis (say a cheap
+  survey of the first 10,000 reviews, then one by one for a few hundred): the exact cards and the estimates are shown
+  separately and never added together, and Save and Continue keep both. A batch of groups is over in seconds, so its
+  progress is the running total ("Estimated from 56,109 reviews read in 562 groups, 74% of the 75,839 on Steam") in the
+  bottom bar and the batch card, and the bar is the share of the game, instead of a count of the batch's own groups.
 - **What is kept.** Only the batch on screen keeps its reviews. A finished batch is reduced to counts, which is all the
   summary needs and is tiny, so there is no limit on how many batches you can read. Results are kept in your browser,
   not in History.
-- **What Jev is asked** (listed on the page), in groups. *Overall:* positive, worth the price, pay to win. *Gameplay:*
+- **The questions** (all of them on by default), in groups. *Overall:* positive, worth the price, pay to win. *Gameplay:*
   difficulty, learning curve, multiplayer and matchmaking, fun with friends, AI quality, controls and UI. *Content and value:* lasting
   appeal, story and writing, DLC and season passes, microtransactions, AI slop (generative-AI art, voice or writing,
   as opposed to the AI inside the game), length. *Technical:* performance, bugs and crashes, lost progress,
@@ -132,7 +148,9 @@ has and shows that and Steam's own rating; this is free and uses no key. Reviews
   **Delete** are in the bottom bar there, as the run buttons are on the Steam reviews page. Continue puts the analysis
   back on the Steam reviews page, table included, to carry on from the same place.
   The small record (counts, and where the next batch starts) is kept in local storage, a few kilobytes however many
-  reviews it covers. The batch's reviews are about 4 KB each, so they are kept in the browser's own database
+  reviews it covers; it also records which questions were on and whether grouping was, and Continue puts those back. A
+  saved analysis that used groups shows the estimates and no table for those reviews.
+  The batch's reviews are about 4 KB each, so they are kept in the browser's own database
   (IndexedDB), which has room for them; a mark you make on a saved batch is kept with it. If a browser will not keep the
   reviews the analysis is still saved, as counts only, and says so.
 - **Accuracy check:** Steam's thumbs up or down is supplied as the expected answer for the positive question, so you see

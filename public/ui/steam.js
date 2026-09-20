@@ -5,7 +5,8 @@ import { DEFAULT_MODEL } from '../request.js';
 import { mergeSpecs } from '../lib/composite.js';
 import { DEFAULT_MIN_CERTAINTY } from '../lib/review.js';
 import { runProgress } from '../lib/overview.js';
-import { batchReplyProblem, buildSteamState, describeSteamReview, emptyTally, expectedFor, mergeTallies, moreSlider, parseSteamApp, reviewsFor, roughDuration, roughTokens, steamFilter, steamFilterChoices, steamQuestions, steamSpecs, STEAM_BATCH_SIZES, STEAM_SORTS, storeUrl, tallyRows, TOKENS_PER_REVIEW } from '../lib/steam.js';
+import { batchReplyProblem, buildGroupState, buildSteamState, chunkReviews, clipForGroup, describeSteamReview, emptyGroupTally, emptyTally, expectedFor, groupTallyRows, mergeGroupTallies, mergeTallies, moreSlider, parseSteamApp, questionSignature, reviewMeta, reviewsFor, roughDuration, roughTokens, steamFilter, steamFilterChoices, steamGroupQuestions, steamQuestions, steamSpecs, STEAM_BATCH_SIZES, STEAM_SORTS, storeUrl, tallyRows, tokensPerReviewEstimate } from '../lib/steam.js';
+import { createModesPanel } from './steam-modes.js';
 import { pct } from '../results.js';
 import { postRun, postSteamReviews } from './api.js';
 import { renderBatchResults } from './batch-results.js';
@@ -69,18 +70,36 @@ export function initSteam() {
     return game ? `${game.appId}|${slice.sort}` : null;
   };
   const onThisGame = () => slice.key != null && slice.key === keyOf();
-  /** Counts for every review read so far: the finished batches, plus the one on screen. */
-  const totalTally = () => mergeTallies(slice.tally, slice.run ? tallyRows(slice.run.rows) : null);
+  const groupRun = () => slice.run?.kind === 'steamgroup';
+  /** Counts for every review read one by one so far: the finished batches, plus the one on screen, unless that is a batch of groups. */
+  const totalTally = () => mergeTallies(slice.tally, slice.run && !groupRun() ? tallyRows(slice.run.rows) : null);
+  /** The same for reviews read in groups, which are estimates. */
+  const totalGroupTally = () => mergeGroupTallies(slice.gtally, groupRun() ? groupTallyRows(slice.run.rows) : null);
   /** Is there a batch on screen that still has reviews to ask Jev about? (Failed ones are for "Resume / retry failed".) */
   const unfinished = () => Boolean(slice.run?.rows.some((r) => r.status !== 'ok' && r.status !== 'error'));
   const hasProgress = () => slice.batches > 0;
+  /** How many reviews Jev has been asked about so far, across every batch and both ways of reading them, counting the ones that failed. */
+  const readCount = () => {
+    const one = totalTally();
+    const grouped = totalGroupTally();
+    return one.answered + one.failed + grouped.reviews + grouped.failedReviews;
+  };
+  /** How reviews are being read and with which questions: two batches with the same signature cost the same per review. */
+  const signatureNow = () => `${slice.grouped ? `groups${slice.groupSize}` : 'each'}|${questionSignature(slice.topics)}`;
   /**
-   * What one review costs in tokens: what the reviews read so far actually cost, once there are enough to go on, and the
-   * built-in guess until then. The questions are the bulk of it, so this changes if they do.
+   * What one review costs in tokens: what the batch on screen has actually cost, once it has enough to go on and was read
+   * the way things are set now, and otherwise worked out from the size of the questions. The questions are the bulk of
+   * it, so this follows the checkboxes and the grouping.
    */
   const perReview = () => {
-    const { answered, tokens } = totalTally();
-    return answered >= MEASURED_AFTER ? tokens / answered : TOKENS_PER_REVIEW;
+    const run = slice.run;
+    if (run?.signature === signatureNow()) {
+      const ok = run.rows.filter((r) => r.status === 'ok');
+      const reviews = ok.reduce((n, r) => n + (r.size ?? 1), 0);
+      const tokens = ok.reduce((n, r) => n + (r.response?.usage ? r.response.usage.input_tokens + r.response.usage.output_tokens : 0), 0);
+      if (reviews >= MEASURED_AFTER) return tokens / reviews;
+    }
+    return tokensPerReviewEstimate({ topics: slice.topics, grouped: slice.grouped, groupSize: slice.groupSize });
   };
   const tokensFor = (reviews) => roughTokens(reviews * perReview());
 
@@ -99,7 +118,9 @@ export function initSteam() {
   function renderCost() {
     const total = slice.summary?.totalReviews ?? 0;
     const all = total > 0 ? ` All ${number(total)} would be roughly ${tokensFor(total)} tokens.` : '';
-    costEl.textContent = `Jev reads every review separately: each batch of ${slice.count} is ${slice.count} requests, roughly ${tokensFor(slice.count)} tokens, with your key.${all}`;
+    costEl.textContent = slice.grouped
+      ? `Jev reads reviews in groups of ${slice.groupSize}: each batch of ${slice.count} is ${Math.ceil(slice.count / slice.groupSize)} requests, roughly ${tokensFor(slice.count)} tokens, with your key.${all}`
+      : `Jev reads every review separately: each batch of ${slice.count} is ${slice.count} requests, roughly ${tokensFor(slice.count)} tokens, with your key.${all}`;
   }
 
   /** What Steam says about the game, how far the analysis has got, and a warning if the link or settings have changed under it. */
@@ -110,9 +131,13 @@ export function initSteam() {
       lines.push(`On Steam: ${summary.scoreDesc || 'no rating'}, ${number(summary.totalPositive)} of ${number(summary.totalReviews)} reviews (all languages) are thumbs up (${pct(summary.totalPositive / summary.totalReviews)}).`);
     }
     if (hasProgress() && onThisGame()) {
-      const tally = totalTally();
+      const one = totalTally();
+      const grouped = totalGroupTally();
+      const analysed = one.answered + grouped.reviews;
+      const tokens = one.tokens + grouped.tokens;
+      const split = one.answered > 0 && grouped.reviews > 0 ? ` (${number(one.answered)} one by one, ${number(grouped.reviews)} in groups)` : '';
       const total = summary?.totalReviews ?? 0;
-      lines.push(`Analysed ${number(tally.answered)}${total > 0 ? ` of ${number(total)} (${pct(Math.min(1, tally.answered / total))})` : ''} in ${number(slice.batches)} ${slice.batches === 1 ? 'batch' : 'batches'}, ${number(tally.tokens)} tokens so far.${slice.exhausted ? ' That is every review Steam has.' : ' The next batch starts where the last one stopped.'}`);
+      lines.push(`Analysed ${number(analysed)}${total > 0 ? ` of ${number(total)} (${pct(Math.min(1, analysed / total))})` : ''}${split} in ${number(slice.batches)} ${slice.batches === 1 ? 'batch' : 'batches'}, ${number(tokens)} tokens so far.${slice.exhausted ? ' That is every review Steam has.' : ' The next batch starts where the last one stopped.'}`);
     } else if (hasProgress()) {
       lines.push('You changed the link or the sort, so the next batch starts over and the totals so far are cleared.');
     }
@@ -158,6 +183,17 @@ export function initSteam() {
   // A different sort is a different order of reviews, so the progress so far no longer applies.
   const sortChanged = () => renderProgress();
 
+  // The checkboxes for which questions are asked and whether reviews are grouped: both change what a review costs.
+  const modes = createModesPanel({
+    slice,
+    onChange: () => {
+      persistSoon();
+      renderCost();
+      renderProgress();
+      syncButtons();
+    },
+  });
+
   document.querySelector('#mode-steam').replaceChildren(
     h(
       'div',
@@ -186,7 +222,7 @@ export function initSteam() {
       ),
       h('p', { class: 'hint' }, "Jev is always given how long the reviewer has played, whether they got the game free or refunded it, and how many found the review helpful. Leave the thumbs off and the Positive card and the accuracy check come from what the review says, checked against the thumbs; turn it on and both just repeat them. It applies from the next batch."),
       progressEl,
-      h('details', { class: 'explainer' }, h('summary', {}, 'What Jev is asked'), h('ul', {}, Object.entries(steamQuestions()).map(([id, q]) => h('li', {}, h('span', { class: 'mono' }, id), `: ${q.instructions}`)))),
+      modes.element,
     ),
   );
 
@@ -232,14 +268,32 @@ export function initSteam() {
   const dockLabel = h('strong', { class: 'dock-progress-label' });
   const dockProgress = h('div', { class: 'dock-progress', role: 'progressbar', 'aria-label': 'Reviews analysed in this batch', hidden: true }, h('div', { class: 'bar bar-big' }, dockFill), dockLabel);
 
-  /** The bar in the bottom bar, shown while an analysis is running: how far the batch on screen has got. */
+  /**
+   * How far reading in groups has got across every batch, as a line that only ever grows ("Estimated from 56,109 reviews
+   * read in 562 groups, 74% of the 75,839 on Steam"). A batch of groups is a handful of requests and is over in seconds,
+   * so a count of its own groups flashes past and resets; the running total is what can be read. `share` is of the game.
+   */
+  function groupedProgress() {
+    const grouped = totalGroupTally();
+    const steamTotal = slice.summary?.totalReviews ?? 0;
+    const share = steamTotal > 0 ? Math.min(1, grouped.reviews / steamTotal) : 0;
+    const of = steamTotal > 0 ? `, ${pct(share)} of the ${number(steamTotal)} on Steam` : '';
+    return { share, known: steamTotal > 0, reviews: grouped.reviews, line: `Estimated from ${number(grouped.reviews)} reviews read in ${number(grouped.groups)} ${grouped.groups === 1 ? 'group' : 'groups'}${of}` };
+  }
+
+  /** The bar in the bottom bar, shown while an analysis is running: how far the batch on screen has got (for groups, how far the whole game has). */
   function syncProgress() {
     const { total, done, share } = slice.run ? runProgress(slice.run.rows) : { total: 0, done: 0, share: 0 };
-    const reading = phase === 'fetching';
+    const overall = groupRun() ? groupedProgress() : null;
+    // A batch of groups is over in seconds, so fetching the next one comes round again and again: once there is a running
+    // total it stays on show, and only the very first fetch (nothing to total yet) says it is reading from Steam.
+    const reading = phase === 'fetching' && !(overall && overall.reviews > 0);
+    const shown = overall?.known ? overall.share : share;
     dockProgress.hidden = !running;
-    dockFill.style.width = reading ? '0%' : `${share * 100}%`;
-    dockLabel.textContent = reading ? 'Reading the next reviews from Steam…' : `Batch ${number(slice.batches)} · ${number(done)} of ${number(total)} · ${Math.round(share * 100)}%`;
-    dockProgress.setAttribute('aria-valuenow', String(reading ? 0 : Math.round(share * 100)));
+    dockProgress.setAttribute('aria-label', overall?.known ? 'Share of the game estimated from groups of reviews' : 'Reviews analysed in this batch');
+    dockFill.style.width = reading ? '0%' : `${shown * 100}%`;
+    dockLabel.textContent = reading ? 'Reading the next reviews from Steam…' : overall ? overall.line : `Batch ${number(slice.batches)} · ${number(done)} of ${number(total)}${groupRun() ? ' groups' : ''} · ${Math.round(share * 100)}%`;
+    dockProgress.setAttribute('aria-valuenow', String(reading ? 0 : Math.round(shown * 100)));
   }
 
   function syncButtons() {
@@ -258,7 +312,14 @@ export function initSteam() {
   const describeRow = (row) => describeSteamReview(row.meta);
 
   /** The summary of every review read so far, with how much of the game that is. */
-  const renderVerdict = () => renderSteamVerdict($('verdict'), hasProgress() ? totalTally() : null, { steamTotal: slice.summary?.totalReviews ?? 0, onPick: pick });
+  function renderVerdict() {
+    const steamTotal = slice.summary?.totalReviews ?? 0;
+    const one = hasProgress() ? totalTally() : null;
+    const grouped = totalGroupTally();
+    // Reviews read one by one give exact cards; reviews read in groups give estimates, under their own heading. Both show if both were used.
+    renderSteamVerdict($('verdict'), one, { steamTotal, onPick: pick, emptyText: grouped.reviews > 0 && !(one?.answered > 0) ? '' : undefined });
+    renderSteamVerdict($('group-verdict'), grouped.reviews > 0 ? grouped : null, { steamTotal, groups: true, emptyText: '' });
+  }
 
   /**
    * A click on a count on the summary: open the table, scroll to it, and show only the reviews that gave that answer. The
@@ -266,7 +327,7 @@ export function initSteam() {
    * than one batch the bar above the table says so.
    */
   function pick(topic, option) {
-    if (!slice.run || !handle) return say('The reviews of this batch are not on screen, so there is nothing to filter. Read a batch first.');
+    if (!slice.run || groupRun() || !handle?.setFilter) return say('The reviews of a batch read one by one are shown in a table, and this one is not on screen, so there is nothing to filter. Read a batch first.');
     handle.setFilter(steamFilter(topic, option, { batches: slice.batches }));
     const card = $('table-card');
     card.open = true;
@@ -275,14 +336,59 @@ export function initSteam() {
     card.scrollIntoView({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' });
   }
 
+  /** A batch of groups: there is no table, only how far it has got. What Jev said about each group goes into the estimates above. */
+  function showGroups() {
+    const run = slice.run;
+    const progressMain = h('strong', { class: 'progress-main' });
+    const progressSub = h('span', { class: 'muted small' });
+    const fatalNote = h('p', { class: 'error', role: 'alert', hidden: true });
+    const resumeBtn = h('button', { type: 'button', class: 'btn btn-sm', onclick: () => resumeFailed() }, 'Resume / retry failed');
+    $('results').replaceChildren(
+      progressMain,
+      progressSub,
+      fatalNote,
+      resumeBtn,
+      h('p', { class: 'hint' }, 'Reviews read in groups have no table: Jev answered about each group as a whole, and the cards above are estimates from that. Untick grouping to read reviews one by one and see them in a table.'),
+    );
+    $('table-card').hidden = true;
+    $('table').replaceChildren();
+    $('table-headline').textContent = '';
+
+    function refreshGroups() {
+      const { total, done, failed, notRun, share, tokens } = runProgress(run.rows);
+      // The headline is the running total across batches, which only grows; this batch's own count goes underneath it
+      progressMain.textContent = groupedProgress().line;
+      $('batch-headline').textContent = progressMain.textContent;
+      progressSub.textContent = [`This batch: ${done} of ${total} groups (${Math.round(share * 100)}%)`, `${number(run.groupSize)} reviews a group`, failed > 0 && `${failed} failed`, !running && notRun > 0 && `${notRun} not run`, tokens > 0 && `${number(tokens)} tokens`].filter(Boolean).join(' · ');
+      fatalNote.hidden = !run.fatal;
+      fatalNote.textContent = run.fatal ? `Stopped early: ${run.fatal}` : '';
+      resumeBtn.hidden = running || failed + notRun === 0;
+    }
+    handle = {
+      refresh: () => {
+        refreshGroups();
+        renderVerdict();
+        renderProgress();
+        renderCost();
+        syncProgress();
+      },
+      setFilter: null,
+    };
+    refreshGroups();
+    renderVerdict();
+    renderProgress();
+  }
+
   function show() {
+    if (groupRun()) return showGroups();
+    $('table-card').hidden = false;
     const inner = renderBatchResults($('results'), slice.run, {
       pageSize: PAGE_SIZE,
       tableRoot: $('table'),
       onTableHeadline: (text) => { $('table-headline').textContent = text; },
       onProgressHeadline: (text) => { $('batch-headline').textContent = text; },
       groupSettings: true,
-      columns: ['positive'], // a column for every question would not fit; open a row to see every answer
+      columns: [slice.run.questions.positive ? 'positive' : Object.keys(slice.run.questions)[0]], // a column for every question would not fit; open a row to see every answer
       filterChoices: () => steamFilterChoices({ batches: slice.batches, where: 'this one' }),
       hideProgressBar: true, // the bar is pinned in the bottom bar while a run is going; this section keeps the count
       onChange: persistSoon,
@@ -326,6 +432,7 @@ export function initSteam() {
     $('table').replaceChildren(h('p', { class: 'muted' }, 'The reviews in the current batch appear here once it has been read.'));
     $('table-headline').textContent = '';
     $('batch-headline').textContent = '';
+    $('table-card').hidden = slice.grouped; // reviews read in groups have no table
   }
 
   /** Ask Jev about these rows of the batch on screen, a few at a time, until they are done or the analysis is stopped. */
@@ -340,7 +447,10 @@ export function initSteam() {
       indices,
       concurrency: slice.concurrency,
       signal: controller.signal,
-      requestFor: (row) => ({ state: buildSteamState(run.game?.name, row, { thumbs: run.thumbs }), model: run.model, questions: run.questions }),
+      requestFor: (row) =>
+        run.kind === 'steamgroup'
+          ? { state: buildGroupState(run.game?.name, row.texts), model: run.model, questions: run.questions }
+          : { state: buildSteamState(run.game?.name, row, { thumbs: run.thumbs }), model: run.model, questions: run.questions },
       send: postRun,
       onUpdate: scheduleRefresh,
     });
@@ -379,7 +489,7 @@ export function initSteam() {
   /* ---------- reading a batch ---------- */
   /** Start over for this game and sort: no batches, no totals, and the next one starts at the first review. */
   function resetProgress(key) {
-    Object.assign(slice, { key, cursor: '*', exhausted: false, batches: 0, tally: emptyTally(), run: null });
+    Object.assign(slice, { key, cursor: '*', exhausted: false, batches: 0, tally: emptyTally(), gtally: emptyGroupTally(), run: null });
     emptyResults();
   }
 
@@ -402,47 +512,66 @@ export function initSteam() {
 
     // The batch on screen is finished with: keep its counts, let its rows go, and put the new one in its place.
     const previous = slice.run;
-    if (previous) slice.tally = mergeTallies(slice.tally, tallyRows(previous.rows));
+    if (previous) {
+      if (previous.kind === 'steamgroup') slice.gtally = mergeGroupTallies(slice.gtally, groupTallyRows(previous.rows));
+      else slice.tally = mergeTallies(slice.tally, tallyRows(previous.rows));
+    }
     slice.game = { appId: game.appId, name: game.name };
     slice.batches++;
-    const questions = steamQuestions();
-    slice.run = {
-      kind: 'steam',
-      game: slice.game,
-      batch: slice.batches,
-      thumbs: slice.tellThumbs, // fixed for the batch, so resuming it reads every review the same way
-      questions,
-      model: DEFAULT_MODEL,
-      rows: data.reviews.map((review, index) => ({
-        index,
-        text: review.text,
-        expected: expectedFor(review),
-        meta: { votedUp: review.votedUp, hoursTotal: review.hoursTotal, hoursAtReview: review.hoursAtReview, hoursRecent: review.hoursRecent, votesUp: review.votesUp, refunded: review.refunded, freeCopy: review.freeCopy, earlyAccess: review.earlyAccess, steamDeck: review.steamDeck },
-        status: 'pending',
-      })),
-      marks: {},
-      open: null,
-      fatal: null,
-      specs: mergeSpecs(questions, previous?.specs ?? steamSpecs()),
-      settings: {
-        panels: { overview: false, ...previous?.settings?.panels }, // a card for every question: the summary above says it better, so this starts closed
-        minCertainty: previous?.settings?.minCertainty ?? DEFAULT_MIN_CERTAINTY,
-        autoCheck: previous?.settings?.autoCheck ?? false,
-        onlyReview: false,
-        sort: { key: 'index', dir: 'asc' },
-        compositeOn: previous?.settings?.compositeOn ?? false, // the topic cards are the answer here; a score column is opt-in
-      },
-    };
+    slice.run = slice.grouped ? newGroupRun(data.reviews) : newReviewRun(data.reviews, previous);
     save.steam();
     show();
     return true;
   }
 
-  /** How many reviews Jev has been asked about so far, across every batch, counting the ones that failed. */
-  const readCount = () => {
-    const t = totalTally();
-    return t.answered + t.failed;
-  };
+  /** A batch of reviews to read one by one: a row for each, with what Steam holds about it, and the questions that are on. */
+  function newReviewRun(reviews, previous) {
+    const questions = steamQuestions(slice.topics);
+    const earlier = previous?.kind === 'steam' ? previous : null; // a batch of groups has no settings to carry over
+    return {
+      kind: 'steam',
+      game: slice.game,
+      batch: slice.batches,
+      signature: signatureNow(),
+      thumbs: slice.tellThumbs, // fixed for the batch, so resuming it reads every review the same way
+      questions,
+      model: DEFAULT_MODEL,
+      rows: reviews.map((review, index) => ({
+        index,
+        text: review.text,
+        expected: expectedFor(review),
+        meta: reviewMeta(review),
+        status: 'pending',
+      })),
+      marks: {},
+      open: null,
+      fatal: null,
+      specs: mergeSpecs(questions, earlier?.specs ?? steamSpecs(slice.topics)),
+      settings: {
+        panels: { overview: false, ...earlier?.settings?.panels }, // a card for every question: the summary above says it better, so this starts closed
+        minCertainty: earlier?.settings?.minCertainty ?? DEFAULT_MIN_CERTAINTY,
+        autoCheck: earlier?.settings?.autoCheck ?? false,
+        onlyReview: false,
+        sort: { key: 'index', dir: 'asc' },
+        compositeOn: earlier?.settings?.compositeOn ?? false, // the topic cards are the answer here; a score column is opt-in
+      },
+    };
+  }
+
+  /** A batch of reviews to read in groups: a row for each group, holding its reviews (cut short) and, once asked, Jev's answers about it. */
+  function newGroupRun(reviews) {
+    return {
+      kind: 'steamgroup',
+      game: slice.game,
+      batch: slice.batches,
+      groupSize: slice.groupSize,
+      signature: signatureNow(),
+      questions: steamGroupQuestions(slice.topics),
+      model: DEFAULT_MODEL,
+      rows: chunkReviews(reviews, slice.groupSize).map((group, index) => ({ index, size: group.length, texts: group.map((review) => clipForGroup(review.text)), status: 'pending' })),
+      fatal: null,
+    };
+  }
 
   /**
    * Analyse the next batch (or finish the one on screen, if it was stopped part way). With `until`, carry on batch after
@@ -453,6 +582,7 @@ export function initSteam() {
     if (running) return;
     const game = parseSteamApp(slice.url);
     if (!game) return say(`Paste a Steam store link first, such as ${EXAMPLE_LINK}`);
+    if (Object.keys(slice.grouped ? steamGroupQuestions(slice.topics) : steamQuestions(slice.topics)).length === 0) return say('Tick at least one question first, under Questions Jev is asked.');
 
     const key = keyOf();
     if (slice.key !== key) {
@@ -463,8 +593,10 @@ export function initSteam() {
 
     // One batch asks here. A run to a chosen share has already shown its cost in the popup, and been asked for there.
     if (!until && !app.status.mock) {
-      const pending = unfinished() ? slice.run.rows.filter((r) => r.status !== 'ok' && r.status !== 'error').length : slice.count;
-      if (pending > CONFIRM_ABOVE && !confirm(`This will make ${number(pending)} API calls with your key, roughly ${tokensFor(pending)} tokens. Continue?`)) return;
+      const waiting = unfinished() ? slice.run.rows.filter((r) => r.status !== 'ok' && r.status !== 'error') : null;
+      const requests = waiting ? waiting.length : slice.grouped ? Math.ceil(slice.count / slice.groupSize) : slice.count;
+      const reviews = waiting ? waiting.reduce((n, r) => n + (r.size ?? 1), 0) : slice.count;
+      if (requests > CONFIRM_ABOVE && !confirm(`This will make ${number(requests)} API calls with your key, roughly ${tokensFor(reviews)} tokens. Continue?`)) return;
     }
 
     say('');
@@ -521,12 +653,13 @@ export function initSteam() {
       target = Math.max(analysed + 1, reviewsFor(total, percent));
       const more = target - analysed;
       const perOne = perReview();
-      const seconds = averageLatencyMs() ? (more * averageLatencyMs()) / 1000 / slice.concurrency : null;
+      const requests = slice.grouped ? Math.ceil(more / slice.groupSize) : more;
+      const seconds = averageLatencyMs() ? (requests * averageLatencyMs()) / 1000 / slice.concurrency : null;
 
       share.textContent = `${percent.toFixed(decimals)}% of the game`;
       sums.replaceChildren(
         h('li', {}, h('strong', {}, `${number(more)} more reviews`), ` (${number(target)} in all, of the ${number(total)} on Steam)`),
-        h('li', {}, `${number(more)} requests to Jev, in about ${number(Math.ceil(more / slice.count))} ${Math.ceil(more / slice.count) === 1 ? 'batch' : 'batches'} of ${slice.count}`),
+        h('li', {}, `${number(requests)} requests to Jev${slice.grouped ? ` (groups of ${slice.groupSize})` : ''}, in about ${number(Math.ceil(more / slice.count))} ${Math.ceil(more / slice.count) === 1 ? 'batch' : 'batches'} of ${slice.count}`),
         h('li', {}, h('strong', {}, `Roughly ${roughTokens(more * perOne)} tokens`), ` at about ${number(Math.round(perOne))} a review${totalTally().answered >= MEASURED_AFTER ? ', measured from the reviews already read' : ', a first estimate that is replaced by the real figure after 20 reviews'}`),
         ...(seconds ? [h('li', {}, `Around ${roughDuration(seconds)}, at the speed so far`)] : []),
       );
@@ -562,7 +695,7 @@ export function initSteam() {
     if (running) stop();
     clearTimeout(lookupTimer);
     lookupController?.abort();
-    Object.assign(slice, { url: '', game: null, summary: null, key: null, cursor: '*', exhausted: false, batches: 0, tally: emptyTally(), run: null, savedId: null });
+    Object.assign(slice, { url: '', game: null, summary: null, key: null, cursor: '*', exhausted: false, batches: 0, tally: emptyTally(), gtally: emptyGroupTally(), run: null, savedId: null });
     urlBox.value = '';
     renderGame();
     renderCost();
@@ -602,6 +735,7 @@ export function initSteam() {
     $('count').value = String(slice.count);
     $('sort').value = slice.sort;
     $('thumbs').checked = slice.tellThumbs;
+    modes.refresh();
     renderGame();
     renderCost();
     renderProgress();

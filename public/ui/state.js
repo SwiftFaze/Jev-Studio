@@ -1,7 +1,7 @@
 import { TEMPLATES, TYPE_EXAMPLES } from '../templates.js';
 import { draftFromRequest, migrateDraft } from '../request.js';
 import { addUsage, emptyUsage } from '../lib/usage.js';
-import { emptyTally, mergeTallies, STEAM_BATCH_SIZES, STEAM_SORTS } from '../lib/steam.js';
+import { emptyGroupTally, emptyTally, mergeGroupTallies, mergeTallies, STEAM_BATCH_SIZES, STEAM_GROUP_SIZES, STEAM_QUESTION_IDS, STEAM_SORTS } from '../lib/steam.js';
 
 // Pages where you write questions. `custom` is the page labelled "Single" in the UI: it takes any question type.
 // The others are locked to one type each.
@@ -91,7 +91,7 @@ const storedRank = readStore(KEYS.rank, {});
 const storedSteam = readStore(KEYS.steam, {});
 const storedSteamSaved = (() => {
   const stored = readStore(KEYS.steamSaved, []);
-  return (Array.isArray(stored) ? stored : []).filter((s) => s && typeof s.id === 'string' && typeof s.name === 'string').map((s) => ({ ...s, tally: mergeTallies(emptyTally(), s.tally), ...(s.total ? { total: mergeTallies(emptyTally(), s.total) } : {}), hasRun: s.hasRun === true }));
+  return (Array.isArray(stored) ? stored : []).filter((s) => s && typeof s.id === 'string' && typeof s.name === 'string').map((s) => ({ ...s, tally: mergeTallies(emptyTally(), s.tally), gtally: mergeGroupTallies(emptyGroupTally(), s.gtally), ...(s.total ? { total: mergeTallies(emptyTally(), s.total) } : {}), ...(s.gtotal ? { gtotal: mergeGroupTallies(emptyGroupTally(), s.gtotal) } : {}), hasRun: s.hasRun === true }));
 })();
 
 /** The Steam page's saved state, with anything missing or no longer valid put back to its default. */
@@ -109,6 +109,11 @@ function steamSlice(stored) {
     exhausted: stored.exhausted === true,
     batches: Number.isInteger(stored.batches) ? stored.batches : 0,
     tally: mergeTallies(emptyTally(), stored.tally),
+    // Which questions are on (all, by default), and whether reviews are read in groups (cheaper, and only estimates) and how many to a group.
+    topics: Array.isArray(stored.topics) ? stored.topics.filter((id) => STEAM_QUESTION_IDS.includes(id)) : [...STEAM_QUESTION_IDS],
+    grouped: stored.grouped === true,
+    groupSize: pick(stored.groupSize, STEAM_GROUP_SIZES, 50),
+    gtally: mergeGroupTallies(emptyGroupTally(), stored.gtally), // the same counts for reviews analysed in groups, for the batches before this one
     savedId: typeof stored.savedId === 'string' ? stored.savedId : null, // the saved analysis this one was carried on from, so saving again offers to overwrite it
     tellThumbs: stored.tellThumbs === true, // off: Jev reads the review without knowing the reviewer's thumbs (see buildSteamState)
     batchOpen: stored.batchOpen !== false, // "This batch" starts open; the table below it starts closed

@@ -490,7 +490,7 @@ dialog[open] { display: flex; flex-direction: column; gap: 10px; }
 /* ===== Steam reviews ===== */
 /* The results column is two sections with no box of their own; they sort after the input like every other results panel. */
 .pane-group { display: contents; }
-#steam-verdict, #steam-results { display: flex; flex-direction: column; gap: 10px; }
+#steam-verdict, #steam-group-verdict, #steam-results { display: flex; flex-direction: column; gap: 10px; }
 #layout[data-kind="bulk"] .pane-group > .panel { order: 3; }
 #layout[data-kind="compare"] .pane-group > .panel { order: 2; } /* a saved analysis uses the compare layout */
 
@@ -533,7 +533,9 @@ dialog[open] { display: flex; flex-direction: column; gap: 10px; }
 /* The run controls take the whole row, so the bar can sit right of Stop and stretch to the edge. */
 #runbar-steam { flex: 1 1 0; min-width: 0; }
 .dock-progress { display: flex; align-items: center; gap: 10px; flex: 1 1 240px; min-width: 200px; }
-.dock-progress-label { font-size: 15px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.dock-progress .bar { flex: 1 1 90px; min-width: 90px; }
+/* Short labels stay on one line; the longer line for groups ("Estimated from … on Steam") wraps rather than squeezing the bar. */
+.dock-progress-label { flex: 0 1 auto; min-width: 0; font-size: 15px; line-height: 1.25; font-variant-numeric: tabular-nums; }
 
 /* A card whose header opens and closes it (the table), with the same cue as the collapsed panels. */
 .panel-fold > summary { cursor: pointer; list-style: none; display: flex; align-items: baseline; justify-content: flex-start; gap: 10px; }
@@ -566,9 +568,24 @@ dialog[open] { display: flex; flex-direction: column; gap: 10px; }
 .filter-chip { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; padding: 8px 12px; border: 1px solid var(--accent); border-radius: 10px; background: var(--accent-soft); font-size: 14px; }
 
 /* A saved Steam analysis: its page has no table, only the results and what to do next. */
-#steamsaved-verdict, #steamsaved-table { display: flex; flex-direction: column; gap: 10px; }
+#steamsaved-verdict, #steamsaved-group-verdict, #steamsaved-table { display: flex; flex-direction: column; gap: 10px; }
 .steamsaved-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 
 /* The menu of answers to show in the table: there are dozens, so it is only as wide as it needs to be. */
 .toolbar-filter { display: inline-flex; align-items: center; gap: 6px; }
 .toolbar-filter select { max-width: 230px; }
+
+/* Which questions are asked, and whether reviews are grouped. */
+.steam-modes { display: flex; flex-direction: column; gap: 8px; }
+.steam-question-tools { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0; }
+.steam-question-group { display: flex; flex-direction: column; gap: 4px; margin-top: 10px; }
+.steam-question-heading { font-weight: 700; color: var(--text); }
+.steam-question-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 2px 14px; padding-left: 22px; }
+.steam-question { font-size: 14px; color: var(--text); }
+.steam-question input:disabled + * , .steam-question:has(input:disabled) { opacity: 0.55; }
+.steam-grouping { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.steam-estimate-title { margin: 6px 0 0; font-size: 16px; }
+#steam-group-verdict:empty, #steamsaved-group-verdict:empty { display: none; }
+
+.steam-questions > summary { display: flex; align-items: baseline; gap: 8px; }
+

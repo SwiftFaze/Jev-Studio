@@ -4,7 +4,7 @@ import { flash } from './save-set.js';
 import { renderBatchResults } from './batch-results.js';
 import { renderSteamVerdict } from './steam-verdict.js';
 import { deleteBatch, getBatch, putBatch } from './idb.js';
-import { describeSteamReview, savedTally, savedTotal, snapshotOf, steamFilter, steamFilterChoices, storeUrl } from '../lib/steam.js';
+import { describeSteamReview, savedGroupTally, savedGroupTotal, savedTally, savedTotal, snapshotOf, steamFilter, steamFilterChoices, storeUrl } from '../lib/steam.js';
 import { pct } from '../results.js';
 
 const $ = (selector) => document.querySelector(selector);
@@ -28,7 +28,7 @@ export function renderSteamSavedMenu() {
   list.hidden = app.steamSaved.length === 0;
   list.replaceChildren(
     ...app.steamSaved.map((a) => {
-      const analysed = savedTotal(a).answered;
+      const analysed = savedTotal(a).answered + savedGroupTotal(a).reviews;
       return h(
         'li',
         {},
@@ -58,6 +58,7 @@ export function openSaveSteam() {
   const body = $('#steam-save-body');
   const snapshot = snapshotOf(slice);
   const total = savedTally(snapshot);
+  const groupTotal = savedGroupTally(snapshot); // reviews read in groups, which are estimates
   const linked = app.steamSaved.find((a) => a.id === slice.savedId); // the one this was carried on from: saving again offers to overwrite it
 
   const nameInput = h('input', { class: 'text', id: 'steam-save-name', maxLength: 80, value: linked?.name ?? slice.game?.name ?? '', placeholder: 'For example: Deep Rock Galactic, most recent', 'aria-label': 'Title' });
@@ -95,7 +96,7 @@ export function openSaveSteam() {
       await deleteBatch(id).catch(() => {});
     }
 
-    const record = { id, name, note: noteInput.value.trim(), savedAt: new Date().toISOString(), ...rest, tally: run && !hasRun ? total : snapshot.tally, total, hasRun };
+    const record = { id, name, note: noteInput.value.trim(), savedAt: new Date().toISOString(), ...rest, tally: run && !hasRun ? total : snapshot.tally, gtally: run && !hasRun ? groupTotal : snapshot.gtally, total, gtotal: groupTotal, hasRun };
     const before = app.steamSaved;
     app.steamSaved = existing ? before.map((a) => (a.id === existing.id ? record : a)) : [...before, record];
     if (!save.steamSaved()) {
@@ -122,7 +123,7 @@ export function openSaveSteam() {
   });
 
   body.replaceChildren(
-    h('p', { class: 'hint' }, `Saves ${plural(total.answered, 'analysed review')} in ${plural(slice.batches, 'batch', 'batches')} and where the next batch starts, as a page under Steam reviews in the menu. It keeps the reviews of the batch on screen too (${plural(snapshot.run?.rows.length ?? 0, 'review')}), so the saved page can show them in a table. Continue analysis on that page brings it back here.`),
+    h('p', { class: 'hint' }, `Saves ${plural(total.answered + groupTotal.reviews, 'analysed review')} in ${plural(slice.batches, 'batch', 'batches')} and where the next batch starts, as a page under Steam reviews in the menu.${snapshot.run?.kind === 'steam' ? ` It keeps the reviews of the batch on screen too (${plural(snapshot.run.rows.length, 'review')}), so the saved page can show them in a table.` : snapshot.run ? ' It keeps the groups of the batch on screen that have not been asked about yet, so they can be finished.' : ''} Continue analysis on that page brings it back here.`),
     h('label', { class: 'field' }, h('span', { class: 'field-label' }, 'Title'), nameInput),
     h('label', { class: 'field' }, h('span', { class: 'field-label' }, 'Note (optional)'), noteInput),
     hint,
@@ -194,8 +195,9 @@ export function createSteamSavedPage({ onContinue, onDeleted }) {
     const headline = $('#steamsaved-table-headline');
     handle = null;
     headline.textContent = '';
-    if (!run) {
-      table.replaceChildren(h('p', { class: 'muted' }, a.hasRun ? 'The reviews of this analysis could not be read from the browser, so there is no table. The counts above are kept.' : 'The reviews were not kept with this analysis, so there is no table. Continue analysis and read another batch to see reviews.'));
+    if (!run || run.kind === 'steamgroup') {
+      const onlyGroups = savedGroupTotal(a).reviews > 0 && savedTotal(a).answered === 0;
+      table.replaceChildren(h('p', { class: 'muted' }, onlyGroups || run ? 'Reviews read in groups have no table: Jev answered about each group as a whole, and the cards are estimates from that.' : a.hasRun ? 'The reviews of this analysis could not be read from the browser, so there is no table. The counts above are kept.' : 'The reviews were not kept with this analysis, so there is no table. Continue analysis and read another batch to see reviews.'));
       return;
     }
     // Only the table is wanted here: the rest of what the results component builds goes into an element that is never shown.
@@ -233,11 +235,15 @@ export function createSteamSavedPage({ onContinue, onDeleted }) {
       continueBtn.disabled = true;
       deleteBtn.disabled = true;
       root.replaceChildren(h('p', { class: 'muted' }, 'There is nothing to show.'));
+      $('#steamsaved-group-verdict').replaceChildren();
       $('#steamsaved-table').replaceChildren();
       $('#steamsaved-table-headline').textContent = '';
       return;
     }
     const tally = savedTotal(a);
+    const groupTally = savedGroupTotal(a);
+    const analysed = tally.answered + groupTally.reviews;
+    const verdictOptions = { steamTotal: a.summary?.totalReviews ?? 0, emptyText: groupTally.reviews > 0 && tally.answered === 0 ? '' : undefined };
     const total = a.summary?.totalReviews ?? 0;
     title.textContent = a.name;
     lede.textContent = a.note ?? '';
@@ -248,11 +254,12 @@ export function createSteamSavedPage({ onContinue, onDeleted }) {
       `${a.game?.name ?? 'Steam app'} · `,
       a.game?.appId ? h('a', { href: storeUrl(a.game.appId), target: '_blank', rel: 'noopener noreferrer' }, 'open on Steam') : '',
       a.game?.appId ? ' · ' : '',
-      `saved ${new Date(a.savedAt).toLocaleString()} · ${number(tally.answered)}${total > 0 ? ` of ${number(total)} (${pct(Math.min(1, tally.answered / total))})` : ''} reviews analysed in ${plural(a.batches, 'batch', 'batches')} · ${number(tally.tokens)} tokens · ${a.exhausted ? 'every review Steam has was read' : 'the next batch starts where this stopped'}`,
+      `saved ${new Date(a.savedAt).toLocaleString()} · ${number(analysed)}${total > 0 ? ` of ${number(total)} (${pct(Math.min(1, analysed / total))})` : ''} reviews analysed${tally.answered > 0 && groupTally.reviews > 0 ? ` (${number(tally.answered)} one by one, ${number(groupTally.reviews)} in groups)` : ''} in ${plural(a.batches, 'batch', 'batches')} · ${number(tally.tokens + groupTally.tokens)} tokens · ${a.exhausted ? 'every review Steam has was read' : 'the next batch starts where this stopped'}`,
     );
 
     // The cards and the header need only the small record, so they are there at once; the table follows once its reviews are read.
-    renderSteamVerdict(root, tally, { steamTotal: total });
+    renderSteamVerdict(root, tally, verdictOptions);
+    renderSteamVerdict($('#steamsaved-group-verdict'), groupTally.reviews > 0 ? groupTally : null, { steamTotal: total, groups: true, emptyText: '' });
     card.open = true;
     if (!a.hasRun && !a.run) return drawTable(a, null);
     $('#steamsaved-table').replaceChildren(h('p', { class: 'muted' }, 'Reading the saved reviews…'));
@@ -260,7 +267,7 @@ export function createSteamSavedPage({ onContinue, onDeleted }) {
     if (!run) run = await getBatch(a.id).catch(() => null);
     if (token !== opening) return; // another analysis was opened while this one was being read
     drawTable(a, run);
-    if (handle) renderSteamVerdict(root, tally, { steamTotal: total, onPick: pick }); // with a table to filter, the counts become clickable
+    if (handle) renderSteamVerdict(root, tally, { ...verdictOptions, onPick: pick }); // with a table to filter, the counts become clickable
   }
 
   return { open };
