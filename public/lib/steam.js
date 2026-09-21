@@ -662,7 +662,7 @@ export function steamFilterChoices({ batches = 1, where = 'this one' } = {}) {
 
 /* ---------- grouping reviews: many in one request, for a fraction of the cost ---------- */
 
-export const STEAM_GROUP_SIZES = [25, 50, 100];
+export const STEAM_GROUP_SIZES = [25, 50, 100, 200];
 export const GROUP_REVIEW_MAX_CHARS = 500; // a review inside a group is cut here: a few very long ones would cost more than all the rest
 
 // What things cost, in tokens, for the estimates. Measured on 300 real reviews of one game: a review sent on its own,

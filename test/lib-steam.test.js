@@ -1125,7 +1125,8 @@ test('fewer questions cost less, groups cost far less, and bigger groups less ag
   const g25 = tokensPerReviewEstimate({ grouped: true, groupSize: 25 });
   const g50 = tokensPerReviewEstimate({ grouped: true, groupSize: 50 });
   const g100 = tokensPerReviewEstimate({ grouped: true, groupSize: 100 });
-  assert.ok(g25 > g50 && g50 > g100, `${g25} > ${g50} > ${g100}`);
+  const g200 = tokensPerReviewEstimate({ grouped: true, groupSize: 200 });
+  assert.ok(g25 > g50 && g50 > g100 && g100 > g200, `${g25} > ${g50} > ${g100} > ${g200}`);
   assert.ok(each / g50 > 15, `groups of 50 are ${(each / g50).toFixed(0)} times cheaper`);
   assert.ok(tokensPerReviewEstimate({ grouped: true, groupSize: 50, topics: SIX }) < g50);
 });
@@ -1143,6 +1144,8 @@ test('saving keeps which questions are on and how reviews are grouped, and carry
   assert.deepEqual(restored.topics, SIX);
   assert.equal(restored.grouped, true);
   assert.equal(restored.groupSize, 25);
+  assert.equal(fieldsFromSaved({ groupSize: 200 }).groupSize, 200, 'a group of 200 is kept, not put back to 50');
+  assert.equal(fieldsFromSaved({ groupSize: 75 }).groupSize, 50, 'a size that is not offered is');
   const older = fieldsFromSaved({ url: 'u', sort: 'recent', count: 50 });
   assert.deepEqual([older.topics.length, older.grouped, older.groupSize], [STEAM_QUESTION_IDS.length, false, 50], 'an older save has every question on and no grouping');
   assert.deepEqual(fieldsFromSaved({ topics: ['pay_to_win', 'made_up'] }).topics, ['pay_to_win'], 'a question that no longer exists is dropped');
