@@ -25,6 +25,7 @@ export function renderSetsMenu() {
 function applySetsMenuState() {
   const open = app.setsMenuOpen;
   $('#sets-toggle').setAttribute('aria-expanded', String(open));
+  $('#sets-arrow').setAttribute('aria-expanded', String(open)); // the arrow follows it (its CSS turns on this)
   $('#sets-menu').hidden = !open;
   $('#sets-btn').hidden = !open;
 }
@@ -44,11 +45,14 @@ export function initSidebar({ onNavigate }) {
     if (item) onNavigate(item.dataset.mode);
   });
 
-  $('#sets-toggle').addEventListener('click', () => {
+  // The name and the arrow beside it do the same thing. The arrow is for the mouse: the name is the one button for the keyboard and screen readers.
+  const toggleSets = () => {
     app.setsMenuOpen = !app.setsMenuOpen;
     save.setsMenu();
     applySetsMenuState();
-  });
+  };
+  $('#sets-toggle').addEventListener('click', toggleSets);
+  $('#sets-arrow').addEventListener('click', toggleSets);
 
   $('#menu-btn').addEventListener('click', () => {
     const open = document.body.classList.toggle('menu-open');
