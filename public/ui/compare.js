@@ -8,7 +8,7 @@ const TYPE_LABEL = { choice: 'Choice', noul: 'Yes / No', score: 'Score' };
 
 const snippet = (entry) => {
   const s = entry.request.state;
-  const text = s == null ? '(no input)' : typeof s === 'string' ? s : JSON.stringify(s);
+  const text = s == null || s === '' ? '(no input)' : typeof s === 'string' ? s : JSON.stringify(s);
   return text.length > 50 ? `${text.slice(0, 50)}…` : text;
 };
 const runLabel = (entry) => `${new Date(entry.ts).toLocaleString()} · ${snippet(entry)}`;

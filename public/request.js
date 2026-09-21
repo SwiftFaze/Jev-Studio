@@ -139,9 +139,10 @@ export function buildQuestions(list) {
 
 /**
  * Draft -> System One request body. Throws an Error with a user-facing message.
- * The input is optional: an empty box sends `state: null`, which the API accepts for self-contained questions.
+ * The input is optional: an empty box sends `state: ""`, which the API accepts for self-contained questions
+ * (`state` is required and `null` is rejected with a 422).
  */
 export function buildRequest(draft) {
-  const state = draft.stateText.trim() === '' ? null : draft.stateText;
+  const state = draft.stateText.trim() === '' ? '' : draft.stateText;
   return { state, model: DEFAULT_MODEL, questions: buildQuestions(draft.questions) };
 }

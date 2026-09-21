@@ -37,14 +37,14 @@ test('a structured state (older history entry) is restored as readable plain tex
   assert.equal('stateMode' in draft, false);
 });
 
-test('an empty or blank input is optional and is sent as state: null', () => {
+test('an empty or blank input is optional and is sent as state: ""', () => {
   const draft = blankDraft();
   draft.questions = [newQuestion({ id: 'q', type: 'noul', instructions: 'Is 7 a prime number?' })];
   for (const text of ['', '   ', '\n\t']) {
     draft.stateText = text;
     const request = buildRequest(draft);
     assert.equal('state' in request, true);
-    assert.equal(request.state, null, JSON.stringify(text));
+    assert.equal(request.state, '', JSON.stringify(text));
   }
   draft.stateText = '  real input  ';
   assert.equal(buildRequest(draft).state, '  real input  ', 'non-blank input is sent exactly as typed');
