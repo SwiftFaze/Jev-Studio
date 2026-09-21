@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.4.0](https://github.com/SwiftFaze/Jev-Studio/compare/v0.3.0...v0.4.0) (2026-09-21)
+
+
+### Features
+
+* Steam groups of 200, 400 and Max, read-ahead, and a loading bar that counts to the reviews chosen ([#12](https://github.com/SwiftFaze/Jev-Studio/issues/12)) ([788a580](https://github.com/SwiftFaze/Jev-Studio/commit/788a58057e36f16ed977722e3fe517f19496e4e7))
+
+
+### Bug Fixes
+
+* send an empty string, not null, when the input box is empty ([#11](https://github.com/SwiftFaze/Jev-Studio/issues/11)) ([9b5a182](https://github.com/SwiftFaze/Jev-Studio/commit/9b5a182b2cbf5df0dab4a41e1d25a56b93dc179e))
+
 ## [0.3.0](https://github.com/SwiftFaze/Jev-Studio/compare/v0.2.0...v0.3.0) (2026-09-20)
 
 
