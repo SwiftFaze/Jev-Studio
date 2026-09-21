@@ -662,7 +662,8 @@ export function steamFilterChoices({ batches = 1, where = 'this one' } = {}) {
 
 /* ---------- grouping reviews: many in one request, for a fraction of the cost ---------- */
 
-export const STEAM_GROUP_SIZES = [25, 50, 100, 200, 400];
+// 'max' is a whole batch in one request: it is worked out from the batch size (see groupSizeFor), so it follows it.
+export const STEAM_GROUP_SIZES = [25, 50, 100, 200, 400, 'max'];
 export const GROUP_REVIEW_MAX_CHARS = 500; // a review inside a group is cut here: a few very long ones would cost more than all the rest
 // The API refuses a request with too much text in it (400, max_tokens_exceeded). Tried with reviews at the 500 character cut: 300 of them
 // (152,000 characters, 36,000 tokens) were accepted and 340 (172,000, about 41,000) were not; the exact limit is not documented. A group
@@ -712,6 +713,27 @@ export function steamGroupQuestions(enabled = null) {
   }
   return questions;
 }
+
+/**
+ * How far a run to a chosen number of reviews has got, for the loading bar. `read` is how many have been read in all,
+ * the run began when `from` had been, and it stops at `until`; so the bar starts at nothing and is full when the run is
+ * done, whatever share of the game that is and however many reviews were already analysed before it.
+ */
+export function runGoalProgress({ read, from, until }) {
+  const total = Math.max(0, until - from);
+  const done = Math.max(0, Math.min(total, read - from));
+  return { done, total, share: total > 0 ? done / total : 0 };
+}
+
+/** The number of reviews in a group: the size that was picked, or the whole batch for 'max'. */
+export const groupSizeFor = (picked, batch) => (picked === 'max' ? Math.min(batch, STEAM_MAX_BATCH) : picked);
+
+/**
+ * How many reviews to ask Steam for ahead of time, while the batch on screen is still being analysed, so the next one is
+ * already there when it finishes. `done` is what has been read so far and `pending` what is still to come from the batch
+ * on screen; 0 when the run to `until` reviews will have all it needs by then.
+ */
+export const readAheadCount = ({ until, done, pending, batch }) => Math.max(0, Math.min(batch, until - done - pending));
 
 /** How long a review may be inside a group of this size: the usual cut, or less when that many of them would be too much text for one request. */
 export const groupClipChars = (groupSize) => Math.min(GROUP_REVIEW_MAX_CHARS, Math.floor(GROUP_MAX_CHARS / groupSize));

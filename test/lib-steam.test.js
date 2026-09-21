@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { GROUP_MAX_CHARS, STEAM_GROUP_SIZES, GROUP_REVIEW_MAX_CHARS, groupClipChars, groupPlan, groupRequests, groupTokensEstimate, SHARE_BANDS, buildGroupState, chunkReviews, clipForGroup, groupTallyRows, mergeGroupTallies, questionSignature, savedGroupTally, savedGroupTotal, shareFromAnswer, steamGroupQuestions, summarizeGroupTally, tokensPerReviewEstimate, STEAM_QUESTION_IDS, emptyGroupTally, describeSteamReview, savedTotal, steamFilter, steamFilterChoices, pickLabel, fieldsFromSaved, rowHasAnswer, savedTally, snapshotOf, moreSlider, reviewsFor, roughDuration, roughTokens, batchReplyProblem, buildSteamState, cleanReviewText, emptyTally, expectedFor, MAX_REVIEW_CHARS, mergeTallies, MIN_MENTIONS, NOT_MENTIONED, parseSteamApp, steamQuestions, steamSpecs, STEAM_BATCH_SIZES, STEAM_GROUPS, STEAM_MAX_BATCH, STEAM_PLATFORM, STEAM_TOPICS, storeUrl, summarizeSteam, summarizeTally, tallyRows, thumbsUpShare, toneFor, visibleGroups } from '../public/lib/steam.js';
+import { GROUP_MAX_CHARS, runGoalProgress, groupSizeFor, readAheadCount, STEAM_GROUP_SIZES, GROUP_REVIEW_MAX_CHARS, groupClipChars, groupPlan, groupRequests, groupTokensEstimate, SHARE_BANDS, buildGroupState, chunkReviews, clipForGroup, groupTallyRows, mergeGroupTallies, questionSignature, savedGroupTally, savedGroupTotal, shareFromAnswer, steamGroupQuestions, summarizeGroupTally, tokensPerReviewEstimate, STEAM_QUESTION_IDS, emptyGroupTally, describeSteamReview, savedTotal, steamFilter, steamFilterChoices, pickLabel, fieldsFromSaved, rowHasAnswer, savedTally, snapshotOf, moreSlider, reviewsFor, roughDuration, roughTokens, batchReplyProblem, buildSteamState, cleanReviewText, emptyTally, expectedFor, MAX_REVIEW_CHARS, mergeTallies, MIN_MENTIONS, NOT_MENTIONED, parseSteamApp, steamQuestions, steamSpecs, STEAM_BATCH_SIZES, STEAM_GROUPS, STEAM_MAX_BATCH, STEAM_PLATFORM, STEAM_TOPICS, storeUrl, summarizeSteam, summarizeTally, tallyRows, thumbsUpShare, toneFor, visibleGroups } from '../public/lib/steam.js';
 import { batchCsvRows } from '../public/lib/export.js';
 import { verdictFor } from '../public/lib/accuracy.js';
 import { parseCsv, toCsv } from '../public/lib/csv.js';
@@ -1220,8 +1220,40 @@ test('a group of 400 shortens each review so the request stays under what the AP
   assert.equal(groupClipChars(400), 350);
   // The worst case: 400 very long reviews. Whatever their length, the text Jev is sent stays within the budget (plus the numbering).
   const long = 'word '.repeat(2000);
-  for (const size of STEAM_GROUP_SIZES) {
+  for (const size of STEAM_GROUP_SIZES.filter(Number.isInteger)) {
     const state = buildGroupState('A game', Array.from({ length: size }, () => clipForGroup(long, groupClipChars(size))));
     assert.ok(state.length <= GROUP_MAX_CHARS + size * 8, `${size}: ${state.length} characters`);
   }
+});
+
+test('Max is a whole batch in one request, and follows the batch size', () => {
+  assert.ok(STEAM_GROUP_SIZES.includes('max'));
+  assert.equal(groupSizeFor('max', 500), 500);
+  assert.equal(groupSizeFor('max', 50), 50);
+  assert.equal(groupSizeFor('max', 9999), 500, 'never more than the biggest batch');
+  assert.equal(groupSizeFor(100, 500), 100, 'a size that was picked is left alone');
+  assert.equal(groupRequests(482604, 500, groupSizeFor('max', 500)), 966, 'one request a batch');
+  assert.equal(groupClipChars(groupSizeFor('max', 500)), 280, 'a whole batch of 500 shortens each review to fit');
+  assert.equal(groupClipChars(groupSizeFor('max', 100)), 500, 'a small batch does not');
+  assert.equal(fieldsFromSaved({ groupSize: 'max' }).groupSize, 'max', 'and it is remembered as Max, not as the number it was that day');
+});
+
+test('what to read ahead: the next batch, cut short when the run will not need all of it, and nothing when it has what it needs', () => {
+  const batch = 500;
+  assert.equal(readAheadCount({ until: 10_000, done: 0, pending: 500, batch }), 500);
+  assert.equal(readAheadCount({ until: 700, done: 0, pending: 500, batch }), 200, 'only the 200 more the run still wants');
+  assert.equal(readAheadCount({ until: 500, done: 0, pending: 500, batch }), 0, 'the batch on screen is the last one');
+  assert.equal(readAheadCount({ until: 400, done: 0, pending: 500, batch }), 0, 'never below nothing');
+  assert.equal(readAheadCount({ until: 10_000, done: 300, pending: 200, batch: 200 }), 200, 'part way through a batch, what is left of it is still to come');
+});
+
+test('the loading bar counts towards the reviews chosen, from nothing to full, not towards the whole game', () => {
+  // 482,604 reviews on Steam, 20,000 already analysed, and 10,000 more chosen.
+  const run = { from: 20_000, until: 30_000 };
+  assert.deepEqual(runGoalProgress({ ...run, read: 20_000 }), { done: 0, total: 10_000, share: 0 }, 'starts empty, not at the 4% the game says');
+  assert.deepEqual(runGoalProgress({ ...run, read: 25_000 }), { done: 5_000, total: 10_000, share: 0.5 });
+  assert.equal(runGoalProgress({ ...run, read: 30_000 }).share, 1);
+  assert.equal(runGoalProgress({ ...run, read: 30_400 }).share, 1, 'a last batch that goes a little over does not go past full');
+  assert.equal(runGoalProgress({ ...run, read: 19_000 }).share, 0, 'and one that is behind does not go below empty');
+  assert.equal(runGoalProgress({ from: 5, until: 5, read: 5 }).share, 0, 'nothing chosen is not a division by zero');
 });
