@@ -33,12 +33,12 @@ test('every example on a typed page uses only that page\'s type, is valid, and g
   }
 });
 
-test('the no-input Yes / No example really has no input and sends state: null', () => {
+test('the no-input Yes / No example really has no input and sends state: ""', () => {
   const example = TYPE_EXAMPLES.yesno.find((e) => /no input/i.test(e.name));
   assert.ok(example);
   const request = buildRequest(draftFromRequest(example.request));
-  assert.equal(request.state, null);
-  assert.equal(validateRequest(request).value.state, null);
+  assert.equal(request.state, '');
+  assert.equal(validateRequest(request).value.state, '');
 });
 
 test('example names are unique per page (the menu is keyed by index, so duplicates would confuse people)', () => {

@@ -43,7 +43,7 @@ only appears once there is something to show.
   is true) and **Score** (position on an ordered scale). The Yes / No, Score and Choice pages each keep their own input
   and questions, so switching pages never overwrites another. Runs from them go into History and restore onto the
   page they came from; *Compare with previous run* compares against the last run on the same page.
-- **The input is optional.** Leave it empty for self-contained questions; an empty box sends `state: null`.
+- **The input is optional.** Leave it empty for self-contained questions; an empty box sends `state: ""`.
 - **New query** starts over: it clears the context, the questions (back to one empty card) and the answers. If your
   questions have any text it asks first, because they are not saved anywhere unless you put them in a Question set. Runs
   stay in History. On a question-set page and on Rank, where the questions are fixed, it clears only the context or

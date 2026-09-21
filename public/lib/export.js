@@ -10,7 +10,7 @@ const round4 = (n) => Math.round(n * 10000) / 10000;
 
 /** A single run as plain text, for pasting into a message or ticket. */
 export function resultsToText({ request, response }) {
-  const lines = ['Input:', request.state == null ? '(none)' : String(request.state), ''];
+  const lines = ['Input:', request.state == null || request.state === '' ? '(none)' : String(request.state), ''];
   for (const [id, q] of Object.entries(request.questions)) {
     const a = response.answers?.[id];
     const head = `${id} (${TYPE_LABEL[q.type] ?? q.type})`;

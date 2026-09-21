@@ -10,8 +10,8 @@ const hasContent = (v) =>
   typeof v === 'string' ? v.trim().length > 0 : v !== null && typeof v === 'object' && Object.keys(v).length > 0;
 
 function normalizeState(state) {
-  if (state === undefined || state === null) return { ok: true, value: null };
-  if (typeof state === 'string') return { ok: true, value: state.trim() === '' ? null : state };
+  if (state === undefined || state === null) return { ok: true, value: '' };
+  if (typeof state === 'string') return { ok: true, value: state.trim() === '' ? '' : state };
   if (typeof state === 'object') return { ok: true, value: state }; // object or array
   return { ok: false };
 }
@@ -56,8 +56,8 @@ export function validateRequest(body) {
   if (!isPlainObject(body)) return { ok: false, errors: ['Request body must be a JSON object.'] };
 
   const errors = [];
-  // The input is optional. The API's `state` key is always sent, but its value may be null, which is what
-  // "no input" means: blank text, or nothing at all, becomes null.
+  // The input is optional, but the API's `state` field is required and rejects null (422 "Field required"), so
+  // "no input" is sent as an empty string: blank text, null, or nothing at all becomes ''.
   const state = normalizeState(body.state);
   if (!state.ok) errors.push('The input (state) must be text, an object, an array, or empty.');
 

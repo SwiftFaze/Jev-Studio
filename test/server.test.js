@@ -231,7 +231,7 @@ test('forwards to upstream with the bearer key and returns answers plus latency'
   });
 });
 
-test('a request with no input is forwarded with state: null, not rejected', async () => {
+test('a request with no input is forwarded with state: "" (the API rejects null), not rejected', async () => {
   const sent = [];
   const fetchImpl = async (_url, init) => (sent.push(JSON.parse(init.body)), jsonResponse(200, upstreamOk));
   await withServer({ apiKey: 'k', fetchImpl }, async (base) => {
@@ -246,7 +246,7 @@ test('a request with no input is forwarded with state: null, not rejected', asyn
     assert.equal(sent.length, 3);
     for (const payload of sent) {
       assert.ok('state' in payload, 'the state key is always sent');
-      assert.equal(payload.state, null);
+      assert.equal(payload.state, '', 'the upstream API requires state and 422s on null');
     }
   });
 });

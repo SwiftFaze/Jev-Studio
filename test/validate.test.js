@@ -29,14 +29,14 @@ test('rejects non-object bodies', () => {
   assert.equal(validateRequest([]).ok, false);
 });
 
-test('the input (state) is optional: missing, null and blank text all become null', () => {
+test('the input (state) is optional: missing, null and blank text all become an empty string', () => {
   for (const state of [undefined, null, '', '   ']) {
     const res = validateRequest({ ...valid(), state });
     assert.equal(res.ok, true, JSON.stringify(state));
-    assert.equal(res.value.state, null, JSON.stringify(state));
+    assert.equal(res.value.state, '', JSON.stringify(state));
   }
   const { state: _omitted, ...withoutState } = valid();
-  assert.equal(validateRequest(withoutState).value.state, null);
+  assert.equal(validateRequest(withoutState).value.state, '');
 });
 
 test('real input is passed through untouched; only text, objects and arrays are accepted', () => {
