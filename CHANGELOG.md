@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0](https://github.com/SwiftFaze/Jev-Studio/compare/v0.4.0...v0.5.0) (2026-09-21)
+
+
+### Features
+
+* wiki answer ([#14](https://github.com/SwiftFaze/Jev-Studio/issues/14)) ([2f4626d](https://github.com/SwiftFaze/Jev-Studio/commit/2f4626dadde54dc29ef6a7f2bbb95e41b4aa7019))
+
 ## [0.4.0](https://github.com/SwiftFaze/Jev-Studio/compare/v0.3.0...v0.4.0) (2026-09-21)
 
 
