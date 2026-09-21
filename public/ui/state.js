@@ -24,6 +24,7 @@ const KEYS = {
   sets: 'jev-studio:sets:v1',
   setInputs: 'jev-studio:setinputs:v1', // the context you last pasted on each set's page
   setsMenu: 'jev-studio:setsmenu:v1', // whether the sidebar's Question sets submenu is open
+  steamMenu: 'jev-studio:steammenu:v1', // whether the saved analyses under Steam reviews in the sidebar are shown
   batch: 'jev-studio:batch:v1',
   rank: 'jev-studio:rank:v1',
   steam: 'jev-studio:steam:v3', // v1 kept every review of one sample, v2 counted six topics; v3 counts each option of twenty, a different shape
@@ -150,6 +151,7 @@ export const app = {
   sets: storedSets,
   setInputs: readStore(KEYS.setInputs, {}),
   setsMenuOpen: readStore(KEYS.setsMenu, true),
+  steamMenuOpen: readStore(KEYS.steamMenu, true),
   batch: { text: '', imported: [], concurrency: 3, ...storedBatch, run: normalizeRun(storedBatch.run) },
   rank: { query: '', text: '', concurrency: 3, ...storedRank, run: normalizeRun(storedRank.run) },
   // The Steam page. Reviews are read and analysed one batch at a time, each starting where the last stopped, so a game
@@ -171,6 +173,7 @@ export const save = {
   sets: () => writeStore(KEYS.sets, app.sets),
   setInputs: () => writeStore(KEYS.setInputs, app.setInputs),
   setsMenu: () => writeStore(KEYS.setsMenu, app.setsMenuOpen),
+  steamMenu: () => writeStore(KEYS.steamMenu, app.steamMenuOpen),
   mode: () => writeStore(KEYS.mode, app.mode),
   batch: () => writeWithRun(KEYS.batch, app.batch),
   rank: () => writeWithRun(KEYS.rank, app.rank),

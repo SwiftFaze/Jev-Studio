@@ -5,7 +5,7 @@ import { DEFAULT_MODEL } from '../request.js';
 import { mergeSpecs } from '../lib/composite.js';
 import { DEFAULT_MIN_CERTAINTY } from '../lib/review.js';
 import { runProgress } from '../lib/overview.js';
-import { batchReplyProblem, buildGroupState, buildSteamState, chunkReviews, clipForGroup, describeSteamReview, emptyGroupTally, emptyTally, expectedFor, groupTallyRows, mergeGroupTallies, mergeTallies, moreSlider, parseSteamApp, questionSignature, reviewMeta, reviewsFor, roughDuration, roughTokens, steamFilter, steamFilterChoices, steamGroupQuestions, steamQuestions, steamSpecs, STEAM_BATCH_SIZES, STEAM_SORTS, storeUrl, tallyRows, tokensPerReviewEstimate } from '../lib/steam.js';
+import { batchReplyProblem, buildGroupState, buildSteamState, chunkReviews, clipForGroup, describeSteamReview, emptyGroupTally, emptyTally, expectedFor, groupClipChars, groupRequests, groupSizeFor, groupTallyRows, groupTokensEstimate, mergeGroupTallies, mergeTallies, moreSlider, parseSteamApp, questionSignature, readAheadCount, runGoalProgress, reviewMeta, reviewsFor, roughDuration, roughTokens, steamFilter, steamFilterChoices, steamGroupQuestions, steamQuestions, steamSpecs, STEAM_BATCH_SIZES, STEAM_SORTS, storeUrl, tallyRows, tokensPerReviewEstimate } from '../lib/steam.js';
 import { createModesPanel } from './steam-modes.js';
 import { pct } from '../results.js';
 import { postRun, postSteamReviews } from './api.js';
@@ -85,13 +85,15 @@ export function initSteam() {
     return one.answered + one.failed + grouped.reviews + grouped.failedReviews;
   };
   /** How reviews are being read and with which questions: two batches with the same signature cost the same per review. */
-  const signatureNow = () => `${slice.grouped ? `groups${slice.groupSize}` : 'each'}|${questionSignature(slice.topics)}`;
+  /** Reviews in a group as things are set now: the size picked, or the whole batch for Max. */
+  const groupSizeNow = () => groupSizeFor(slice.groupSize, slice.count);
+  const signatureNow = () => `${slice.grouped ? `groups${groupSizeNow()}` : 'each'}|${questionSignature(slice.topics)}`;
   /**
    * What one review costs in tokens: what the batch on screen has actually cost, once it has enough to go on and was read
    * the way things are set now, and otherwise worked out from the size of the questions. The questions are the bulk of
    * it, so this follows the checkboxes and the grouping.
    */
-  const perReview = () => {
+  const perReview = (howMany = slice.count) => {
     const run = slice.run;
     if (run?.signature === signatureNow()) {
       const ok = run.rows.filter((r) => r.status === 'ok');
@@ -99,9 +101,11 @@ export function initSteam() {
       const tokens = ok.reduce((n, r) => n + (r.response?.usage ? r.response.usage.input_tokens + r.response.usage.output_tokens : 0), 0);
       if (reviews >= MEASURED_AFTER) return tokens / reviews;
     }
-    return tokensPerReviewEstimate({ topics: slice.topics, grouped: slice.grouped, groupSize: slice.groupSize });
+    // In groups the estimate follows how they are really cut: inside each batch, so the last group of a batch is a short one.
+    if (slice.grouped && howMany > 0) return groupTokensEstimate(howMany, slice.count, groupSizeNow(), slice.topics) / howMany;
+    return tokensPerReviewEstimate({ topics: slice.topics, grouped: slice.grouped, groupSize: groupSizeNow() });
   };
-  const tokensFor = (reviews) => roughTokens(reviews * perReview());
+  const tokensFor = (reviews) => roughTokens(reviews * perReview(reviews));
 
   /* ---------- input panel ---------- */
   const gameEl = h('p', { id: 'steam-game', class: 'small muted', role: 'status' });
@@ -119,7 +123,7 @@ export function initSteam() {
     const total = slice.summary?.totalReviews ?? 0;
     const all = total > 0 ? ` All ${number(total)} would be roughly ${tokensFor(total)} tokens.` : '';
     costEl.textContent = slice.grouped
-      ? `Jev reads reviews in groups of ${slice.groupSize}: each batch of ${slice.count} is ${Math.ceil(slice.count / slice.groupSize)} requests, roughly ${tokensFor(slice.count)} tokens, with your key.${all}`
+      ? `Jev reads reviews in groups of ${groupSizeNow()}: each batch of ${slice.count} is ${Math.ceil(slice.count / groupSizeNow())} ${Math.ceil(slice.count / groupSizeNow()) === 1 ? 'request' : 'requests'}, roughly ${tokensFor(slice.count)} tokens, with your key.${all}`
       : `Jev reads every review separately: each batch of ${slice.count} is ${slice.count} requests, roughly ${tokensFor(slice.count)} tokens, with your key.${all}`;
   }
 
@@ -205,7 +209,7 @@ export function initSteam() {
       h(
         'div',
         { class: 'bulk-meta' },
-        setting('count', 'Batch size', STEAM_BATCH_SIZES.map((n) => [n, String(n)]), { after: renderCost }),
+        setting('count', 'Batch size', STEAM_BATCH_SIZES.map((n) => [n, String(n)]), { after: () => { renderCost(); modes.refresh(); } }), // Max group size follows the batch size
         setting('sort', 'Show', Object.entries(STEAM_SORTS), { after: sortChanged }),
         h('label', { class: 'small' }, 'Run ', (() => {
           const select = h('select', { id: 'steam-concurrency', 'aria-label': 'Requests at a time', onchange: (e) => { slice.concurrency = Number(e.target.value); save.steam(); } }, [1, 2, 3, 4, 5, 6].map((n) => h('option', { value: String(n) }, String(n))));
@@ -281,19 +285,28 @@ export function initSteam() {
     return { share, known: steamTotal > 0, reviews: grouped.reviews, line: `Estimated from ${number(grouped.reviews)} reviews read in ${number(grouped.groups)} ${grouped.groups === 1 ? 'group' : 'groups'}${of}` };
   }
 
-  /** The bar in the bottom bar, shown while an analysis is running: how far the batch on screen has got (for groups, how far the whole game has). */
+  /** The reviews a run was asked to analyse, when it was started from "Analyse more…": where it began and where it stops, both counted over every batch. Null for a single batch. */
+  let goal = null;
+
+  /**
+   * The bar in the bottom bar, shown while an analysis is running. For a run to a chosen number of reviews it counts towards that number,
+   * from nothing at the start to full at the end. Otherwise it is how far the batch on screen has got (for groups, how far the whole game has).
+   */
   function syncProgress() {
     const { total, done, share } = slice.run ? runProgress(slice.run.rows) : { total: 0, done: 0, share: 0 };
     const overall = groupRun() ? groupedProgress() : null;
+    const target = goal && running ? runGoalProgress({ read: readCount(), from: goal.from, until: goal.until }) : null;
+    const targetLine = target && `Batch ${number(slice.batches)} · ${number(target.done)} of ${number(target.total)} chosen reviews · ${Math.round(target.share * 100)}%${groupRun() ? ' · estimated from groups' : ''}`;
     // A batch of groups is over in seconds, so fetching the next one comes round again and again: once there is a running
     // total it stays on show, and only the very first fetch (nothing to total yet) says it is reading from Steam.
     const reading = phase === 'fetching' && !(overall && overall.reviews > 0);
-    const shown = overall?.known ? overall.share : share;
+    const shown = target ? target.share : overall?.known ? overall.share : share;
+    const empty = reading && !target; // with a target the bar keeps what it has while the next reviews are read
     dockProgress.hidden = !running;
-    dockProgress.setAttribute('aria-label', overall?.known ? 'Share of the game estimated from groups of reviews' : 'Reviews analysed in this batch');
-    dockFill.style.width = reading ? '0%' : `${shown * 100}%`;
-    dockLabel.textContent = reading ? 'Reading the next reviews from Steam…' : overall ? overall.line : `Batch ${number(slice.batches)} · ${number(done)} of ${number(total)}${groupRun() ? ' groups' : ''} · ${Math.round(share * 100)}%`;
-    dockProgress.setAttribute('aria-valuenow', String(reading ? 0 : Math.round(shown * 100)));
+    dockProgress.setAttribute('aria-label', target ? 'Progress towards the reviews you chose to analyse' : overall?.known ? 'Share of the game estimated from groups of reviews' : 'Reviews analysed in this batch');
+    dockFill.style.width = empty ? '0%' : `${shown * 100}%`;
+    dockLabel.textContent = reading ? (target ? `${targetLine} · reading the next reviews from Steam…` : 'Reading the next reviews from Steam…') : targetLine ?? (overall ? overall.line : `Batch ${number(slice.batches)} · ${number(done)} of ${number(total)}${groupRun() ? ' groups' : ''} · ${Math.round(share * 100)}%`);
+    dockProgress.setAttribute('aria-valuenow', String(empty ? 0 : Math.round(shown * 100)));
   }
 
   function syncButtons() {
@@ -475,6 +488,7 @@ export function initSteam() {
     } catch (err) {
       if (err.name !== 'AbortError') say(err.status === 405 ? STALE_SERVER : err.message);
     } finally {
+      goal = null;
       running = false;
       phase = 'idle';
       controller = null;
@@ -493,15 +507,27 @@ export function initSteam() {
     emptyResults();
   }
 
-  /** Read the next batch from Steam and put it on screen ready to run. Resolves false when there is nothing more to read. */
-  async function readBatch(count = slice.count) {
+  /** Ask Steam for a batch of reviews and change nothing: putting it on screen is readBatch's job, so a batch asked for early can still be dropped. */
+  async function fetchBatch(count, cursor) {
     const game = parseSteamApp(slice.url);
-    phase = 'fetching';
-    syncButtons();
-    say('');
-    const data = await postSteamReviews({ app: game.appId, count, sort: slice.sort, cursor: slice.cursor }, controller.signal);
+    const data = await postSteamReviews({ app: game.appId, count, sort: slice.sort, cursor }, controller.signal);
     const problem = batchReplyProblem(data);
     if (problem) throw new Error(problem); // before anything is changed, so the next press starts from the same place
+    return data;
+  }
+
+  /**
+   * Read the next batch from Steam and put it on screen ready to run. Resolves false when there is nothing more to read.
+   * `ahead` is that batch already asked for (see analyse), which saves waiting for Steam when the last one has finished.
+   */
+  async function readBatch(count = slice.count, ahead = null) {
+    const game = parseSteamApp(slice.url);
+    if (!ahead) {
+      phase = 'fetching';
+      syncButtons();
+      say('');
+    }
+    const data = await (ahead ?? fetchBatch(count, slice.cursor));
     if (data.summary) slice.summary = data.summary; // Steam sends its totals with the first page only; keep the ones we have otherwise
     slice.cursor = data.cursor;
     slice.exhausted = data.done;
@@ -564,11 +590,11 @@ export function initSteam() {
       kind: 'steamgroup',
       game: slice.game,
       batch: slice.batches,
-      groupSize: slice.groupSize,
+      groupSize: groupSizeNow(),
       signature: signatureNow(),
       questions: steamGroupQuestions(slice.topics),
       model: DEFAULT_MODEL,
-      rows: chunkReviews(reviews, slice.groupSize).map((group, index) => ({ index, size: group.length, texts: group.map((review) => clipForGroup(review.text)), status: 'pending' })),
+      rows: chunkReviews(reviews, groupSizeNow()).map((group, index) => ({ index, size: group.length, texts: group.map((review) => clipForGroup(review.text, groupClipChars(groupSizeNow()))), status: 'pending' })),
       fatal: null,
     };
   }
@@ -594,22 +620,37 @@ export function initSteam() {
     // One batch asks here. A run to a chosen share has already shown its cost in the popup, and been asked for there.
     if (!until && !app.status.mock) {
       const waiting = unfinished() ? slice.run.rows.filter((r) => r.status !== 'ok' && r.status !== 'error') : null;
-      const requests = waiting ? waiting.length : slice.grouped ? Math.ceil(slice.count / slice.groupSize) : slice.count;
+      const requests = waiting ? waiting.length : slice.grouped ? Math.ceil(slice.count / groupSizeNow()) : slice.count;
       const reviews = waiting ? waiting.reduce((n, r) => n + (r.size ?? 1), 0) : slice.count;
       if (requests > CONFIRM_ABOVE && !confirm(`This will make ${number(requests)} API calls with your key, roughly ${tokensFor(reviews)} tokens. Continue?`)) return;
     }
 
     say('');
+    goal = until > 0 ? { from: readCount(), until } : null; // withAction clears it when the run is over
     await withAction(async () => {
       let first = true;
       const wantMore = () => until > 0 && !slice.exhausted && readCount() < until;
+      // A run over several batches asks Steam for the next one while Jev is still working on this one. Steam takes longer to read a batch than Jev does to
+      // analyse it, and its pages have to be read one after another, so this is where the time goes. Nothing is changed until the batch is used, so
+      // Stop, an error or a different count just drops it, and the cursor is still where the batch on screen left it.
+      let ahead = null;
+      const readAhead = () => {
+        const pending = slice.run.rows.reduce((n, r) => n + (r.status === 'ok' || r.status === 'error' ? 0 : (r.size ?? 1)), 0);
+        const count = until > 0 && !slice.exhausted ? readAheadCount({ until, done: readCount(), pending, batch: slice.count }) : 0;
+        if (count < 1) return null;
+        const promise = fetchBatch(count, slice.cursor);
+        promise.catch(() => {}); // if it fails it fails where it is used, and only if it is still wanted
+        return { count, promise };
+      };
       do {
         if (!unfinished()) {
           const count = until ? Math.max(1, Math.min(slice.count, until - readCount())) : slice.count;
-          if (!(await readBatch(count))) break;
+          if (!(await readBatch(count, ahead?.count === count ? ahead.promise : null))) break;
           if (first) revealPane($('verdict'));
         }
+        ahead = null;
         first = false;
+        ahead = readAhead();
         await execute(slice.run.rows.flatMap((r, i) => (r.status === 'ok' || r.status === 'error' ? [] : [i])));
         if (controller.signal.aborted || slice.run.fatal) break;
         if (wantMore()) say(`Analysing: ${number(readCount())} of ${number(until)} reviews so far. Stop to pause, and Analyse more carries on from here.`);
@@ -652,14 +693,14 @@ export function initSteam() {
       const percent = Number(slider.value);
       target = Math.max(analysed + 1, reviewsFor(total, percent));
       const more = target - analysed;
-      const perOne = perReview();
-      const requests = slice.grouped ? Math.ceil(more / slice.groupSize) : more;
+      const perOne = perReview(more);
+      const requests = slice.grouped ? groupRequests(more, slice.count, groupSizeNow()) : more;
       const seconds = averageLatencyMs() ? (requests * averageLatencyMs()) / 1000 / slice.concurrency : null;
 
       share.textContent = `${percent.toFixed(decimals)}% of the game`;
       sums.replaceChildren(
         h('li', {}, h('strong', {}, `${number(more)} more reviews`), ` (${number(target)} in all, of the ${number(total)} on Steam)`),
-        h('li', {}, `${number(requests)} requests to Jev${slice.grouped ? ` (groups of ${slice.groupSize})` : ''}, in about ${number(Math.ceil(more / slice.count))} ${Math.ceil(more / slice.count) === 1 ? 'batch' : 'batches'} of ${slice.count}`),
+        h('li', {}, `${number(requests)} requests to Jev${slice.grouped ? ` (groups of ${groupSizeNow()})` : ''}, in about ${number(Math.ceil(more / slice.count))} ${Math.ceil(more / slice.count) === 1 ? 'batch' : 'batches'} of ${slice.count}`),
         h('li', {}, h('strong', {}, `Roughly ${roughTokens(more * perOne)} tokens`), ` at about ${number(Math.round(perOne))} a review${totalTally().answered >= MEASURED_AFTER ? ', measured from the reviews already read' : ', a first estimate that is replaced by the real figure after 20 reviews'}`),
         ...(seconds ? [h('li', {}, `Around ${roughDuration(seconds)}, at the speed so far`)] : []),
       );

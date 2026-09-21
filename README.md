@@ -82,7 +82,9 @@ has and shows that and Steam's own rating; this is free and uses no key. Reviews
   reviews (in steps of a tenth of a percent for a big game), with jump-to buttons for 1%, 5%, 10%, 25%, 50% and 100%. Under
   it, live, is what that costs: how many more reviews and requests, roughly how many tokens, and about how long at the
   speed so far. Nothing is spent until you press its button. It then runs batch after batch until it gets there (the last
-  batch is cut short, so it stops at the chosen share and not past it), and you can press **Stop** at any time.
+  batch is cut short, so it stops at the chosen share and not past it), and you can press **Stop** at any time. The bar
+  at the bottom counts towards the reviews you chose, from empty to full, not towards the whole game. While Jev works on a
+  batch, the next one is already being read from Steam, which is the slower of the two, so a long run is not spent waiting.
 - **It costs what it costs.** By default Jev is asked all twenty-four questions about each review, in a separate request
   per review, and the questions are most of the cost: a first guess is about 3,200 tokens a review, and after the first
   20 reviews the page uses what they actually cost. The popup shows the estimate for whatever you pick, and warns above
@@ -94,7 +96,8 @@ has and shows that and Steam's own rating; this is free and uses no key. Reviews
   above it shows the cost as you tick. The cards only cover questions that were on when a review was read, so switching one
   on later covers the reviews read from then on. *Performance by platform* needs *Runs badly* and reviews read one by one,
   so it is greyed out without it.
-- **Group reviews** is a checkbox with a group size (**25, 50 or 100**). Instead of one request per review, Jev gets a
+- **Group reviews** is a checkbox with a group size (**25, 50, 100, 200, 400 or Max**, which is a whole batch in one request; a group is capped at
+  140,000 characters of review text, which the API needs, so the biggest groups shorten each review to fit). Instead of one request per review, Jev gets a
   whole group of reviews in one request and is asked what share of the group says each thing, which is about **30 times
   cheaper** (roughly 110 tokens a review at 50 to a group, against about 3,200). The trade-offs, all shown on the page:
   the cards are **estimates, marked ≈**, in their own section ("Estimated from groups of reviews"); there is **no table**

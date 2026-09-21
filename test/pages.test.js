@@ -132,6 +132,7 @@ test('saving never throws when browser storage is unavailable (as in Node, and i
     save.mode();
     save.setInputs();
     save.setsMenu();
+    save.steamMenu();
   });
 });
 
@@ -142,6 +143,7 @@ test('a saved question set is a page of its own, addressed as set:<id>', () => {
   assert.equal(MODES.some(isSetMode), false, 'set pages are dynamic, never part of the fixed list');
   assert.deepEqual(app.setInputs, {}, 'no context is remembered for any set until you paste one');
   assert.equal(app.setsMenuOpen, true, 'the Question sets submenu starts open');
+  assert.equal(app.steamMenuOpen, true, 'and so do the saved analyses under Steam reviews');
 });
 
 test('with a set page open, the question builder points at Single (a set has no visible questions)', () => {

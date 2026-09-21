@@ -662,8 +662,13 @@ export function steamFilterChoices({ batches = 1, where = 'this one' } = {}) {
 
 /* ---------- grouping reviews: many in one request, for a fraction of the cost ---------- */
 
-export const STEAM_GROUP_SIZES = [25, 50, 100];
+// 'max' is a whole batch in one request: it is worked out from the batch size (see groupSizeFor), so it follows it.
+export const STEAM_GROUP_SIZES = [25, 50, 100, 200, 400, 'max'];
 export const GROUP_REVIEW_MAX_CHARS = 500; // a review inside a group is cut here: a few very long ones would cost more than all the rest
+// The API refuses a request with too much text in it (400, max_tokens_exceeded). Tried with reviews at the 500 character cut: 300 of them
+// (152,000 characters, 36,000 tokens) were accepted and 340 (172,000, about 41,000) were not; the exact limit is not documented. A group
+// stays under this many characters, so the biggest groups shorten each review to fit and the rest are not touched.
+export const GROUP_MAX_CHARS = 140_000;
 
 // What things cost, in tokens, for the estimates. Measured on 300 real reviews of one game: a review sent on its own,
 // with its facts and header, was 78 tokens; a review's text was 32 on average (the median was 7), plus a few to number it.
@@ -709,8 +714,32 @@ export function steamGroupQuestions(enabled = null) {
   return questions;
 }
 
+/**
+ * How far a run to a chosen number of reviews has got, for the loading bar. `read` is how many have been read in all,
+ * the run began when `from` had been, and it stops at `until`; so the bar starts at nothing and is full when the run is
+ * done, whatever share of the game that is and however many reviews were already analysed before it.
+ */
+export function runGoalProgress({ read, from, until }) {
+  const total = Math.max(0, until - from);
+  const done = Math.max(0, Math.min(total, read - from));
+  return { done, total, share: total > 0 ? done / total : 0 };
+}
+
+/** The number of reviews in a group: the size that was picked, or the whole batch for 'max'. */
+export const groupSizeFor = (picked, batch) => (picked === 'max' ? Math.min(batch, STEAM_MAX_BATCH) : picked);
+
+/**
+ * How many reviews to ask Steam for ahead of time, while the batch on screen is still being analysed, so the next one is
+ * already there when it finishes. `done` is what has been read so far and `pending` what is still to come from the batch
+ * on screen; 0 when the run to `until` reviews will have all it needs by then.
+ */
+export const readAheadCount = ({ until, done, pending, batch }) => Math.max(0, Math.min(batch, until - done - pending));
+
+/** How long a review may be inside a group of this size: the usual cut, or less when that many of them would be too much text for one request. */
+export const groupClipChars = (groupSize) => Math.min(GROUP_REVIEW_MAX_CHARS, Math.floor(GROUP_MAX_CHARS / groupSize));
+
 /** A review, cut short for a group. */
-export const clipForGroup = (text) => (text.length > GROUP_REVIEW_MAX_CHARS ? `${text.slice(0, GROUP_REVIEW_MAX_CHARS - 1).trimEnd()}…` : text);
+export const clipForGroup = (text, max = GROUP_REVIEW_MAX_CHARS) => (text.length > max ? `${text.slice(0, max - 1).trimEnd()}…` : text);
 
 /** What Jev reads for a group: the reviews, numbered, and nothing else about them (the questions are about the group). */
 export function buildGroupState(gameName, texts) {
@@ -851,6 +880,29 @@ export function tokensPerReviewEstimate({ topics = null, grouped = false, groupS
   const questions = steamGroupQuestions(topics);
   return Math.round((JSON.stringify(questions).length / 4 + groupSize * GROUP_REVIEW_TOKENS + Object.keys(questions).length * OUTPUT_TOKENS_PER_QUESTION + REQUEST_OVERHEAD_TOKENS) / groupSize);
 }
+
+/**
+ * The groups reading `total` reviews takes, as `[{ size, count }]`. Groups are cut inside a batch and never across two
+ * (see chunkReviews, which the page runs on each batch), so a batch of 500 in groups of 200 is 200, 200 and 100, not two
+ * and a half: the requests come to more than total / size, and the small group at the end of each batch costs more a review.
+ */
+export function groupPlan(total, batch, size) {
+  const counts = new Map();
+  const add = (reviews, times) => {
+    if (times < 1) return;
+    for (let left = reviews; left > 0; left -= size) counts.set(Math.min(size, left), (counts.get(Math.min(size, left)) ?? 0) + times);
+  };
+  add(batch, Math.floor(total / batch));
+  add(total % batch, 1);
+  return [...counts].map(([groupSize, count]) => ({ size: groupSize, count }));
+}
+
+/** How many requests reading `total` reviews in groups makes. */
+export const groupRequests = (total, batch, size) => groupPlan(total, batch, size).reduce((n, g) => n + g.count, 0);
+
+/** The tokens reading `total` reviews in groups is expected to cost: each group at its own size, so the short one at the end of a batch counts for what it costs. */
+export const groupTokensEstimate = (total, batch, size, topics = null) =>
+  groupPlan(total, batch, size).reduce((sum, g) => sum + g.count * g.size * tokensPerReviewEstimate({ topics, grouped: true, groupSize: g.size }), 0);
 
 /** What Steam holds about a review that is kept with its row: for the line under it in the table, and for what Jev is told about the reviewer. */
 export const reviewMeta = (review) => ({

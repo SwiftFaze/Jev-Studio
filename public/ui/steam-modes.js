@@ -1,5 +1,5 @@
 import { h } from '../dom.js';
-import { STEAM_GROUPS, STEAM_GROUP_SIZES, STEAM_PLATFORM, STEAM_QUESTION_IDS, STEAM_TOPICS, tokensPerReviewEstimate } from '../lib/steam.js';
+import { groupClipChars, groupSizeFor, STEAM_GROUPS, STEAM_GROUP_SIZES, STEAM_PLATFORM, STEAM_QUESTION_IDS, STEAM_TOPICS, tokensPerReviewEstimate } from '../lib/steam.js';
 
 const BASICS = ['positive', 'worth_price', 'pay_to_win', 'performance', 'stability', 'replayability']; // the six the page started with: the cheapest way to see what matters most
 const number = (n) => n.toLocaleString('en-US');
@@ -65,14 +65,14 @@ export function createModesPanel({ slice, onChange }) {
   );
 
   const groupedBox = h('input', { type: 'checkbox', id: 'steam-grouped', onchange: (e) => { slice.grouped = e.target.checked; onChange(); refresh(); } });
-  const sizeSelect = h('select', { id: 'steam-group-size', 'aria-label': 'Reviews in a group', onchange: (e) => { slice.groupSize = Number(e.target.value); onChange(); refresh(); } }, STEAM_GROUP_SIZES.map((n) => h('option', { value: String(n) }, String(n))));
+  const sizeSelect = h('select', { id: 'steam-group-size', 'aria-label': 'Reviews in a group', onchange: (e) => { slice.groupSize = e.target.value === 'max' ? 'max' : Number(e.target.value); onChange(); refresh(); } }, STEAM_GROUP_SIZES.map((n) => h('option', { value: String(n) }, n === 'max' ? 'Max (a whole batch)' : String(n))));
   const groupedNote = h('p', { class: 'hint' });
 
   const groupedRow = h(
     'div',
     { class: 'steam-grouping' },
     h('label', { class: 'check', title: 'Send many reviews to Jev in one request and ask what share of them say each thing, instead of one request per review.' }, groupedBox, ' Group reviews to make it cheaper'),
-    h('label', { class: 'small' }, ' ', sizeSelect, ' reviews a group'),
+    h('label', { class: 'small' }, ' Group size ', sizeSelect),
   );
 
   /** Bring every control in line with the page's state, and say what it costs. */
@@ -92,12 +92,13 @@ export function createModesPanel({ slice, onChange }) {
     sizeSelect.disabled = !slice.grouped;
 
     const each = tokensPerReviewEstimate({ topics: slice.topics });
-    const grouped = tokensPerReviewEstimate({ topics: slice.topics, grouped: true, groupSize: slice.groupSize });
+    const size = groupSizeFor(slice.groupSize, slice.count);
+    const grouped = tokensPerReviewEstimate({ topics: slice.topics, grouped: true, groupSize: size });
     const count = slice.topics.length;
-    headline.textContent = `${count} of ${STEAM_QUESTION_IDS.length} on · about ${number(slice.grouped ? grouped : each)} tokens a review${slice.grouped ? ` in groups of ${slice.groupSize}` : ''}`;
+    headline.textContent = `${count} of ${STEAM_QUESTION_IDS.length} on · about ${number(slice.grouped ? grouped : each)} tokens a review${slice.grouped ? ` in groups of ${size}` : ''}`;
     groupedNote.textContent = slice.grouped
-      ? `Reviews are sent ${slice.groupSize} at a time and Jev is asked what share of each group says each thing, so the cards are estimates (marked ≈), and there is no table, no filter and no accuracy check against the thumbs. About ${number(grouped)} tokens a review, against ${number(each)} one by one (${(each / grouped).toFixed(0)} times cheaper).`
-      : `One request per review gives exact counts and a table you can filter. Grouping sends ${slice.groupSize} at a time instead, at about ${number(grouped)} tokens a review against ${number(each)} (${(each / grouped).toFixed(0)} times cheaper), but the counts become estimates and there is no table.`;
+      ? `Reviews are sent ${size} at a time${slice.groupSize === 'max' ? ' (a whole batch in one request' + (groupClipChars(size) < 500 ? `, each review cut to ${groupClipChars(size)} characters to fit` : '') + ')' : ''} and Jev is asked what share of each group says each thing, so the cards are estimates (marked ≈), and there is no table, no filter and no accuracy check against the thumbs. About ${number(grouped)} tokens a review, against ${number(each)} one by one (${(each / grouped).toFixed(0)} times cheaper).`
+      : `One request per review gives exact counts and a table you can filter. Grouping sends ${size} at a time instead, at about ${number(grouped)} tokens a review against ${number(each)} (${(each / grouped).toFixed(0)} times cheaper), but the counts become estimates and there is no table.`;
   }
 
   refresh();
