@@ -5,7 +5,7 @@ import { DEFAULT_MODEL } from '../request.js';
 import { mergeSpecs } from '../lib/composite.js';
 import { DEFAULT_MIN_CERTAINTY } from '../lib/review.js';
 import { runProgress } from '../lib/overview.js';
-import { batchReplyProblem, buildGroupState, buildSteamState, chunkReviews, clipForGroup, describeSteamReview, emptyGroupTally, emptyTally, expectedFor, groupTallyRows, mergeGroupTallies, mergeTallies, moreSlider, parseSteamApp, questionSignature, reviewMeta, reviewsFor, roughDuration, roughTokens, steamFilter, steamFilterChoices, steamGroupQuestions, steamQuestions, steamSpecs, STEAM_BATCH_SIZES, STEAM_SORTS, storeUrl, tallyRows, tokensPerReviewEstimate } from '../lib/steam.js';
+import { batchReplyProblem, buildGroupState, buildSteamState, chunkReviews, clipForGroup, describeSteamReview, emptyGroupTally, emptyTally, expectedFor, groupClipChars, groupRequests, groupTallyRows, groupTokensEstimate, mergeGroupTallies, mergeTallies, moreSlider, parseSteamApp, questionSignature, reviewMeta, reviewsFor, roughDuration, roughTokens, steamFilter, steamFilterChoices, steamGroupQuestions, steamQuestions, steamSpecs, STEAM_BATCH_SIZES, STEAM_SORTS, storeUrl, tallyRows, tokensPerReviewEstimate } from '../lib/steam.js';
 import { createModesPanel } from './steam-modes.js';
 import { pct } from '../results.js';
 import { postRun, postSteamReviews } from './api.js';
@@ -91,7 +91,7 @@ export function initSteam() {
    * the way things are set now, and otherwise worked out from the size of the questions. The questions are the bulk of
    * it, so this follows the checkboxes and the grouping.
    */
-  const perReview = () => {
+  const perReview = (howMany = slice.count) => {
     const run = slice.run;
     if (run?.signature === signatureNow()) {
       const ok = run.rows.filter((r) => r.status === 'ok');
@@ -99,9 +99,11 @@ export function initSteam() {
       const tokens = ok.reduce((n, r) => n + (r.response?.usage ? r.response.usage.input_tokens + r.response.usage.output_tokens : 0), 0);
       if (reviews >= MEASURED_AFTER) return tokens / reviews;
     }
+    // In groups the estimate follows how they are really cut: inside each batch, so the last group of a batch is a short one.
+    if (slice.grouped && howMany > 0) return groupTokensEstimate(howMany, slice.count, slice.groupSize, slice.topics) / howMany;
     return tokensPerReviewEstimate({ topics: slice.topics, grouped: slice.grouped, groupSize: slice.groupSize });
   };
-  const tokensFor = (reviews) => roughTokens(reviews * perReview());
+  const tokensFor = (reviews) => roughTokens(reviews * perReview(reviews));
 
   /* ---------- input panel ---------- */
   const gameEl = h('p', { id: 'steam-game', class: 'small muted', role: 'status' });
@@ -568,7 +570,7 @@ export function initSteam() {
       signature: signatureNow(),
       questions: steamGroupQuestions(slice.topics),
       model: DEFAULT_MODEL,
-      rows: chunkReviews(reviews, slice.groupSize).map((group, index) => ({ index, size: group.length, texts: group.map((review) => clipForGroup(review.text)), status: 'pending' })),
+      rows: chunkReviews(reviews, slice.groupSize).map((group, index) => ({ index, size: group.length, texts: group.map((review) => clipForGroup(review.text, groupClipChars(slice.groupSize))), status: 'pending' })),
       fatal: null,
     };
   }
@@ -652,8 +654,8 @@ export function initSteam() {
       const percent = Number(slider.value);
       target = Math.max(analysed + 1, reviewsFor(total, percent));
       const more = target - analysed;
-      const perOne = perReview();
-      const requests = slice.grouped ? Math.ceil(more / slice.groupSize) : more;
+      const perOne = perReview(more);
+      const requests = slice.grouped ? groupRequests(more, slice.count, slice.groupSize) : more;
       const seconds = averageLatencyMs() ? (requests * averageLatencyMs()) / 1000 / slice.concurrency : null;
 
       share.textContent = `${percent.toFixed(decimals)}% of the game`;

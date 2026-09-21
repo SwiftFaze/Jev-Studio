@@ -94,7 +94,7 @@ has and shows that and Steam's own rating; this is free and uses no key. Reviews
   above it shows the cost as you tick. The cards only cover questions that were on when a review was read, so switching one
   on later covers the reviews read from then on. *Performance by platform* needs *Runs badly* and reviews read one by one,
   so it is greyed out without it.
-- **Group reviews** is a checkbox with a group size (**25, 50, 100 or 200**). Instead of one request per review, Jev gets a
+- **Group reviews** is a checkbox with a group size (**25, 50, 100, 200 or 400**). Instead of one request per review, Jev gets a
   whole group of reviews in one request and is asked what share of the group says each thing, which is about **30 times
   cheaper** (roughly 110 tokens a review at 50 to a group, against about 3,200). The trade-offs, all shown on the page:
   the cards are **estimates, marked ≈**, in their own section ("Estimated from groups of reviews"); there is **no table**

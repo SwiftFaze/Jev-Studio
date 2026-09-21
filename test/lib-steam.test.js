@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { GROUP_REVIEW_MAX_CHARS, SHARE_BANDS, buildGroupState, chunkReviews, clipForGroup, groupTallyRows, mergeGroupTallies, questionSignature, savedGroupTally, savedGroupTotal, shareFromAnswer, steamGroupQuestions, summarizeGroupTally, tokensPerReviewEstimate, STEAM_QUESTION_IDS, emptyGroupTally, describeSteamReview, savedTotal, steamFilter, steamFilterChoices, pickLabel, fieldsFromSaved, rowHasAnswer, savedTally, snapshotOf, moreSlider, reviewsFor, roughDuration, roughTokens, batchReplyProblem, buildSteamState, cleanReviewText, emptyTally, expectedFor, MAX_REVIEW_CHARS, mergeTallies, MIN_MENTIONS, NOT_MENTIONED, parseSteamApp, steamQuestions, steamSpecs, STEAM_BATCH_SIZES, STEAM_GROUPS, STEAM_MAX_BATCH, STEAM_PLATFORM, STEAM_TOPICS, storeUrl, summarizeSteam, summarizeTally, tallyRows, thumbsUpShare, toneFor, visibleGroups } from '../public/lib/steam.js';
+import { GROUP_MAX_CHARS, STEAM_GROUP_SIZES, GROUP_REVIEW_MAX_CHARS, groupClipChars, groupPlan, groupRequests, groupTokensEstimate, SHARE_BANDS, buildGroupState, chunkReviews, clipForGroup, groupTallyRows, mergeGroupTallies, questionSignature, savedGroupTally, savedGroupTotal, shareFromAnswer, steamGroupQuestions, summarizeGroupTally, tokensPerReviewEstimate, STEAM_QUESTION_IDS, emptyGroupTally, describeSteamReview, savedTotal, steamFilter, steamFilterChoices, pickLabel, fieldsFromSaved, rowHasAnswer, savedTally, snapshotOf, moreSlider, reviewsFor, roughDuration, roughTokens, batchReplyProblem, buildSteamState, cleanReviewText, emptyTally, expectedFor, MAX_REVIEW_CHARS, mergeTallies, MIN_MENTIONS, NOT_MENTIONED, parseSteamApp, steamQuestions, steamSpecs, STEAM_BATCH_SIZES, STEAM_GROUPS, STEAM_MAX_BATCH, STEAM_PLATFORM, STEAM_TOPICS, storeUrl, summarizeSteam, summarizeTally, tallyRows, thumbsUpShare, toneFor, visibleGroups } from '../public/lib/steam.js';
 import { batchCsvRows } from '../public/lib/export.js';
 import { verdictFor } from '../public/lib/accuracy.js';
 import { parseCsv, toCsv } from '../public/lib/csv.js';
@@ -1126,7 +1126,8 @@ test('fewer questions cost less, groups cost far less, and bigger groups less ag
   const g50 = tokensPerReviewEstimate({ grouped: true, groupSize: 50 });
   const g100 = tokensPerReviewEstimate({ grouped: true, groupSize: 100 });
   const g200 = tokensPerReviewEstimate({ grouped: true, groupSize: 200 });
-  assert.ok(g25 > g50 && g50 > g100 && g100 > g200, `${g25} > ${g50} > ${g100} > ${g200}`);
+  const g400 = tokensPerReviewEstimate({ grouped: true, groupSize: 400 });
+  assert.ok(g25 > g50 && g50 > g100 && g100 > g200 && g200 > g400, `${g25} > ${g50} > ${g100} > ${g200} > ${g400}`);
   assert.ok(each / g50 > 15, `groups of 50 are ${(each / g50).toFixed(0)} times cheaper`);
   assert.ok(tokensPerReviewEstimate({ grouped: true, groupSize: 50, topics: SIX }) < g50);
 });
@@ -1145,6 +1146,7 @@ test('saving keeps which questions are on and how reviews are grouped, and carry
   assert.equal(restored.grouped, true);
   assert.equal(restored.groupSize, 25);
   assert.equal(fieldsFromSaved({ groupSize: 200 }).groupSize, 200, 'a group of 200 is kept, not put back to 50');
+  assert.equal(fieldsFromSaved({ groupSize: 400 }).groupSize, 400);
   assert.equal(fieldsFromSaved({ groupSize: 75 }).groupSize, 50, 'a size that is not offered is');
   const older = fieldsFromSaved({ url: 'u', sort: 'recent', count: 50 });
   assert.deepEqual([older.topics.length, older.grouped, older.groupSize], [STEAM_QUESTION_IDS.length, false, 50], 'an older save has every question on and no grouping');
@@ -1189,4 +1191,37 @@ test('a saved analysis that read reviews both ways keeps both counts, and neithe
   assert.equal(restored.run, null);
   assert.equal(restored.tally.answered, 30);
   assert.equal(restored.gtally.reviews, 50);
+});
+
+test('groups are cut inside a batch, so a batch of 500 in groups of 200 is three requests, not two and a half', () => {
+  assert.deepEqual(groupPlan(500, 500, 200), [{ size: 200, count: 2 }, { size: 100, count: 1 }]);
+  assert.equal(groupRequests(500, 500, 200), 3);
+  assert.equal(groupRequests(500, 500, 100), 5, 'a size that divides the batch wastes nothing');
+  assert.equal(groupRequests(50, 50, 200), 1, 'a group bigger than the batch is the batch');
+  assert.equal(groupRequests(0, 500, 200), 0);
+});
+
+test('the whole of a big game: 482,604 reviews in batches of 500 and groups of 200 is 2,896 requests, not the 2,414 that ignoring batches gives', () => {
+  const plan = groupPlan(482604, 500, 200);
+  assert.equal(plan.reduce((n, g) => n + g.count * g.size, 0), 482604, 'every review is in exactly one group');
+  assert.equal(groupRequests(482604, 500, 200), 2896);
+  assert.ok(2896 > Math.ceil(482604 / 200));
+});
+
+test('the short group at the end of each batch makes reading it a little dearer than the full-group estimate', () => {
+  const full = tokensPerReviewEstimate({ grouped: true, groupSize: 200 }) * 500;
+  const real = groupTokensEstimate(500, 500, 200);
+  assert.ok(real > full, `${real} > ${full}`);
+  assert.equal(groupTokensEstimate(400, 200, 200), tokensPerReviewEstimate({ grouped: true, groupSize: 200 }) * 400, 'and with nothing left over it is the plain estimate');
+});
+
+test('a group of 400 shortens each review so the request stays under what the API accepts; smaller groups are cut as before', () => {
+  for (const size of [25, 50, 100, 200]) assert.equal(groupClipChars(size), GROUP_REVIEW_MAX_CHARS, `groups of ${size} keep the usual cut`);
+  assert.equal(groupClipChars(400), 350);
+  // The worst case: 400 very long reviews. Whatever their length, the text Jev is sent stays within the budget (plus the numbering).
+  const long = 'word '.repeat(2000);
+  for (const size of STEAM_GROUP_SIZES) {
+    const state = buildGroupState('A game', Array.from({ length: size }, () => clipForGroup(long, groupClipChars(size))));
+    assert.ok(state.length <= GROUP_MAX_CHARS + size * 8, `${size}: ${state.length} characters`);
+  }
 });
