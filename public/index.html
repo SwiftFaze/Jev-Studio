@@ -27,7 +27,10 @@
         </div>
         <div class="nav-group">
           <div class="nav-label">Tools</div>
-          <button type="button" class="nav-item" data-mode="steam" aria-pressed="false">Steam reviews</button>
+          <div class="nav-row">
+            <button type="button" class="nav-item" data-mode="steam" aria-pressed="false">Steam reviews</button>
+            <button type="button" class="nav-arrow" id="steam-toggle" aria-expanded="true" aria-controls="steam-saved-menu" aria-label="Saved Steam analyses" title="Show or hide the saved analyses" hidden><span class="nav-chevron" aria-hidden="true"></span></button>
+          </div>
           <ul class="nav-sub" id="steam-saved-menu" aria-label="Saved Steam analyses" hidden></ul>
         </div>
         <div class="nav-group">

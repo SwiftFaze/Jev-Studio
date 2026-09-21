@@ -7,7 +7,7 @@ import { createWorkspace } from './ui/workspace.js';
 import { createSetPage } from './ui/setpage.js';
 import { initBulk } from './ui/bulk.js';
 import { initSteam } from './ui/steam.js';
-import { createSteamSavedPage, renderSteamSavedMenu } from './ui/steam-saved.js';
+import { createSteamSavedPage, renderSteamSavedMenu, toggleSteamSavedMenu } from './ui/steam-saved.js';
 import { getBatch } from './ui/idb.js';
 import { fieldsFromSaved } from './lib/steam.js';
 import { initCompare, openCompare, refreshCompare } from './ui/compare.js';
@@ -260,6 +260,7 @@ for (const page of PAGES) workspaces[page] = createWorkspace(page, { onCompare: 
 setPage = createSetPage({ onCompare: openComparison });
 steamSavedPage = createSteamSavedPage({ onContinue: continueSteam, onDeleted: () => setMode('steam') });
 renderSteamSavedMenu();
+document.querySelector('#steam-toggle').addEventListener('click', toggleSteamSavedMenu);
 initBuilder();
 bulk.batch = initBulk('batch', { openCsv: openCsvDialog });
 bulk.rank = initBulk('rank');

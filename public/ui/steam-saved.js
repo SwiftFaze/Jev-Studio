@@ -22,10 +22,21 @@ export function initSteamSaved(options) {
 
 const findByName = (name) => app.steamSaved.find((a) => a.name.toLowerCase() === name.trim().toLowerCase());
 
+/** Show or hide the saved analyses under Steam reviews, from the arrow beside it. */
+export function toggleSteamSavedMenu() {
+  app.steamMenuOpen = !app.steamMenuOpen;
+  save.steamMenu();
+  renderSteamSavedMenu();
+}
+
 /** The saved analyses, listed under Steam reviews in the menu: one entry each, every one a page of its own. */
 export function renderSteamSavedMenu() {
   const list = $('#steam-saved-menu');
-  list.hidden = app.steamSaved.length === 0;
+  const toggle = $('#steam-toggle');
+  const any = app.steamSaved.length > 0;
+  toggle.hidden = !any; // nothing to show or hide until an analysis has been saved
+  toggle.setAttribute('aria-expanded', String(app.steamMenuOpen));
+  list.hidden = !any || !app.steamMenuOpen;
   list.replaceChildren(
     ...app.steamSaved.map((a) => {
       const analysed = savedTotal(a).answered + savedGroupTotal(a).reviews;
