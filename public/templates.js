@@ -323,6 +323,15 @@ export const BATCH_EXAMPLES = [
   },
 ];
 
+// Questions to try on the Wikipedia answer page. Mercury is a good one to watch: it is a planet, an element and a god.
+export const WIKIPEDIA_EXAMPLES = [
+  { name: 'How big is Paris?', question: 'How big is Paris?' },
+  { name: 'How tall is Mount Everest?', question: 'How tall is Mount Everest?' },
+  { name: 'Who wrote Frankenstein?', question: 'Who wrote Frankenstein?' },
+  { name: 'When was the Eiffel Tower finished?', question: 'When was the Eiffel Tower finished?' },
+  { name: 'How old is Mercury? (planet, element or god)', question: 'How old is Mercury?' },
+];
+
 // Games to try on the Steam page. Each is just a store link; the game's name is read from it.
 export const STEAM_EXAMPLES = [
   { name: 'Deep Rock Galactic', url: 'https://store.steampowered.com/app/548430/Deep_Rock_Galactic/' },

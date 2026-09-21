@@ -37,6 +37,7 @@ only appears once there is something to show.
 | **Batch** | Many items, same questions | Its own questions (separate from Single), paste lines or load a CSV, review flags with auto check-off, composite score with weights, accuracy check, CSV export; two examples in the menu |
 | **Rank** | Order candidates for a query | Batch engine with fixed relevance questions and adjustable weights; an example (88 foods ranked by "Could this be used as an effective weapon?") is in the examples menu |
 | **Steam reviews** (under *Tools*) | What players say about a game | Paste a store link; Jev reads its reviews a batch at a time and answers fixed questions about each: positive, worth the price, pay to win, performance, bugs and crashes, lasting appeal |
+| **Wikipedia answer** (under *Tools*) | A plain question, answered with a quote from Wikipedia | Type a question; Jev finds the article, the part of it and the sentence that answers it, and shows the quote, a link to where it came from, and every step it took with how sure it was |
 | **Compare** | See what changed between two runs | Side-by-side probabilities and deltas, notes when wording or options changed |
 
 - **Question types**, matching the API: **Choice** (pick one option), **Yes / No** (a "noul": probability a statement
@@ -163,6 +164,71 @@ has and shows that and Steam's own rating; this is free and uses no key. Reviews
   Reviews are cleaned of Steam's markup and cut at 3000 characters. Reading reviews needs no API key, and it also works in
   mock mode, where only Jev's answers are fake.
 
+### Wikipedia answer in detail
+
+It is under **Tools** in the menu. Ask a plain question ("How big is Paris?") and press **Find answer** (or Enter). The page
+is three cards: the **Question**, then the **Answer**, which is only the quote from Wikipedia that answers it with a link to
+the part of the article it came from, then **How Jev got there**: what the run cost (requests to Jev, tokens, time, articles
+read, the final check, the search terms tried) and every step Jev took.
+
+```
+How big is Paris?
+  1. Search term   "Paris"                                    95%
+  2. Article       Paris                                     100%   (of 7 results)
+  3. Part          Infobox                                    89%   what the question asks for: area 58%, both 40%
+  4. Answer        "Area: 105.4 km2 (40.7 sq mi) • Urban 2,824.2 km2 …"  99%
+  5. Check         answers the question                       96%
+  → https://en.wikipedia.org/wiki/Paris
+```
+
+- **Jev never writes the answer.** Code builds a list of candidates at each step and Jev *picks* one, so the answer is
+  always text that is really on the page: it can be cited and cannot be invented. When it goes wrong, the steps show which
+  one went wrong.
+- **The steps.** (1) Which search term: the question as typed, without its question words, each run of content words and
+  each name in it, because Wikipedia's search is noisy for a whole question ("how big is paris" finds an album first). (2)
+  Which article, from the search results, asked together with a Yes / No on each result's snippet ("does it already state
+  the answer?"). (3) Which part of the article: the infobox (the box down the side, read as rows such as *Area* and
+  *Population*), or a section such as "Geography › Climate", asked together with what the question means ("area" or
+  "population"?). (4) Which sentence, infobox row or table row in that part. (5) A final Yes / No on that sentence with the ones
+  either side of it: does it *state* the answer, rather than just mention the subject?
+- **Tables are read too.** Wikipedia's plain text leaves every table out, so the page is also read as HTML for its infobox and its
+  tables. Each row of a table becomes one candidate, with its column names and the group it is under ("Petrol engines —
+  Model: 1.6 litre VTi 16v • Top speed: 187 km/h (116 mph) • …"), and a part that has a table lists its column names for Jev, as
+  the infobox lists its row labels. A section that is only a table (no text) is offered as a part like any other. That is
+  how "what is the top speed of a Citroën C4 Picasso for the 1.6 litre VTi 16v model" finds the *Engines* table. Cells that span rows or
+  columns are filled in; navigation boxes, infoboxes inside the article, and the tables of *See also* and *References* are left out.
+- **The steps are shown as the same cards as on the Single page**: the question Jev was asked, the option it picked, its
+  confidence, and a bar for every option Jev was given (all of them, however many; a long list scrolls inside its card). Each step is **folded by
+  default** to one line ("3. Part  Infobox  89%"); open one for its card, or use **Expand all** and **Collapse all**. The sentence that
+  became the answer is marked.
+- **Found** means the final check is at least 60% sure. If it is not, the steps go back **without asking Jev again where they
+  can**: the next part by probability, then the next article, skipping disambiguation pages. When the articles from one search
+  are used up, a **different path** is tried: the next search term, with its own results. It says "Not found" when it is out of
+  places to look or hits a limit, and the message says which, and which setting would let it go on. The best case is 5 requests,
+  which is about 4,000 to 6,000 tokens.
+- **Settings** (a card under the question, folded by default; kept in your browser). **Most requests to Jev** (12), **most
+  articles to read** (3, over every path), **most parts of an article to try** (3) and **most search terms to try** (3) each
+  take a number or **No limit**. **Accept an answer when the final check is at least** (60%) trades finding something more
+  often against being wrong more often. **Skip anything Jev rates under** (5%): after the first choice, an article, part
+  or search term is only tried if Jev gave it at least this much, because below that it is a guess that costs requests. **No
+  limit lifts the limits, not this floor**, so a search with every limit off can still stop early; set the floor to 0 to
+  try everything, which can take hundreds of requests on a question with no answer. **Show a quick answer** can be turned off,
+  which also saves the Yes / No question on every snippet.
+- **Try again and Try a different path** are in the bottom bar once a run has finished, next to **Save answer**. *Try again*
+  asks the question afresh with the settings as they are now (change them first to look harder). *Try a different path* asks
+  again but keeps away from every article and search term the tries so far used, so it goes somewhere new, which is what to
+  press when an answer was found but is wrong.
+- **Quick answer.** If Jev is at least 80% sure a search snippet already states the answer, it is shown at once, marked as
+  coming from the snippet, while the full path carries on to confirm it. If the full path finds an answer, that replaces it.
+- **Saved answers.** **Save answer** (in the bottom bar) keeps the question, the quote, its link, how sure Jev was, and the
+  steps and what the run cost, in your browser only. Saved answers are listed under *Wikipedia answer* in the menu, newest first,
+  and each is a **page of its own**, like a saved Steam analysis: the question, the answer, and how Jev got there. Its bottom
+  bar has **Ask again** (back to the Wikipedia answer page with the question in the box) and **Remove**. The last 50 are kept.
+  A saved link is checked to be an address on Wikipedia when it is loaded.
+- **English Wikipedia only.** Reading Wikipedia needs no API key, and it also works in mock mode, where only Jev's answers
+  are fake. Not in this version: questions that need two facts or a calculation ("Is Paris bigger than London?"),
+  and other languages. A row that is longer than 400 characters is cut there, so a very wide table can lose its last columns.
+
 ### Batch and Rank in detail
 
 - **Load a CSV** and pick the text column. Columns named `expected_<question_id>` (for example `expected_department`)
@@ -251,13 +317,15 @@ browser tab  ->  http://localhost:3000/api/run  ->  local server (src/)  ->  htt
 ```
 
 - `public/lib/`: the logic, with no DOM so it is unit-tested: CSV, batch runner, review flags, accuracy, composite
-  scoring, linter, compare, question sets, export.
+  scoring, linter, compare, question sets, export, and the Wikipedia steps (`wikipedia.js` builds the questions for Jev and
+  reads the text, `wikipedia-run.js` decides what to ask next).
 - `public/ui/`: the screens for each mode. Vanilla ES modules, no build step.
 - `public/request.js`: converts between the editor and the API request shape.
 - `src/server.js`: serves the UI and proxies `/api/run`, and saves or removes the key (`/api/key`).
 - `src/keystore.js`: the encrypted key file.
 - `src/validate.js`: checks requests against the documented limits (2-255 choice options, 2-10 score levels, and so on)
   and returns readable errors before any API call is made.
+- `src/steam.js`, `src/wikipedia.js`: read Steam reviews and Wikipedia articles on the page's behalf.
 - `src/typesafe.js`: the upstream call; retries 429/529 with exponential backoff, as the API docs recommend.
 - `src/cli.js`: the entry point: starts the server and opens the browser.
 - `scripts/build.mjs`: bundles `src/` with esbuild, embeds it and all of `public/` in a
@@ -275,6 +343,12 @@ The page cannot call Steam itself under that policy, so `POST /api/steam/reviews
 Only the numeric app id from a pasted link is used to build the Steam request, so a link is never fetched as typed, and
 your TypeSafe key is never sent to Steam. Reviewers' names and profiles are not passed on to the page. The one other
 thing a request can carry, the cursor that says where the next batch starts, is only accepted if it looks like Steam's.
+
+Wikipedia is the same: `POST /api/wikipedia/search` and `POST /api/wikipedia/article` (JSON only) make the calls, because the
+policy stops the page and because Wikimedia asks for a descriptive `User-Agent`, which a browser cannot set. Every request goes to the one
+fixed host `en.wikipedia.org`; only a checked search text or article title is sent to it, and your TypeSafe key never is. Wikipedia's HTML is
+never passed to the page: the server takes the text out of it, and the page draws that text as text. Links to articles are built from the
+title, so they always lead to `en.wikipedia.org`.
 
 TypeSafe's API does not allow browser requests from other origins (it answers a CORS preflight with
 `Disallowed CORS origin`), so this app can't be a static page on GitHub Pages; it needs the local server.

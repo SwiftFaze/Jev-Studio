@@ -32,6 +32,11 @@
             <button type="button" class="nav-arrow" id="steam-toggle" aria-expanded="true" aria-controls="steam-saved-menu" aria-label="Saved Steam analyses" title="Show or hide the saved analyses" hidden><span class="nav-chevron" aria-hidden="true"></span></button>
           </div>
           <ul class="nav-sub" id="steam-saved-menu" aria-label="Saved Steam analyses" hidden></ul>
+          <div class="nav-row">
+            <button type="button" class="nav-item" data-mode="wikipedia" aria-pressed="false">Wikipedia answer</button>
+            <button type="button" class="nav-arrow" id="wikipedia-toggle" aria-expanded="true" aria-controls="wikipedia-saved-menu" aria-label="Saved Wikipedia answers" title="Show or hide the saved answers" hidden><span class="nav-chevron" aria-hidden="true"></span></button>
+          </div>
+          <ul class="nav-sub" id="wikipedia-saved-menu" aria-label="Saved Wikipedia answers" hidden></ul>
         </div>
         <div class="nav-group">
           <div class="nav-row">
@@ -78,6 +83,8 @@
           <div id="mode-rank" class="mode" hidden></div>
           <div id="mode-steam" class="mode" hidden></div>
           <div id="mode-steamsaved" class="mode" hidden></div>
+          <div id="mode-wikipedia" class="mode" hidden></div>
+          <div id="mode-wikipediasaved" class="mode" hidden></div>
           <div id="mode-compare" class="mode" hidden></div>
 
           <div id="builder-panel" class="panel">
@@ -147,6 +154,28 @@
               <div id="steamsaved-table"></div>
             </details>
           </div>
+          <!-- The question card is above (in the input column). Here: the answer, and how Jev got there. Saved answers are in the menu, under Wikipedia answer. -->
+          <div id="pane-wikipedia" class="pane-group" hidden>
+            <div class="panel">
+              <div class="panel-head"><h2>Answer</h2></div>
+              <div id="wikipedia-answer" aria-live="polite"></div>
+            </div>
+            <div class="panel">
+              <div class="panel-head"><h2>How Jev got there</h2></div>
+              <div id="wikipedia-trail"></div>
+            </div>
+          </div>
+          <!-- A saved answer: the same two cards, under the question. -->
+          <div id="pane-wikipediasaved" class="pane-group" hidden>
+            <div class="panel">
+              <div class="panel-head"><h2>Answer</h2></div>
+              <div id="wikipediasaved-answer"></div>
+            </div>
+            <div class="panel">
+              <div class="panel-head"><h2>How Jev got there</h2></div>
+              <div id="wikipediasaved-trail"></div>
+            </div>
+          </div>
           <div id="pane-compare" class="panel" hidden>
             <div class="panel-head"><h2>Differences</h2></div>
             <div id="compare-results"></div>
@@ -166,6 +195,8 @@
           <div id="runbar-rank" class="runbar" hidden></div>
           <div id="runbar-steam" class="runbar" hidden></div>
           <div id="runbar-steamsaved" class="runbar" hidden></div>
+          <div id="runbar-wikipedia" class="runbar" hidden></div>
+          <div id="runbar-wikipediasaved" class="runbar" hidden></div>
           <span id="dock-flash" class="dock-flash" role="status"></span>
         </div>
       </div>

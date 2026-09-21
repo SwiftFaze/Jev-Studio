@@ -1,13 +1,15 @@
 import { TEMPLATES, TYPE_EXAMPLES } from '../templates.js';
 import { draftFromRequest, migrateDraft } from '../request.js';
 import { addUsage, emptyUsage } from '../lib/usage.js';
+import { cleanSavedAnswers } from '../lib/wikipedia.js';
+import { cleanSettings } from '../lib/wikipedia-run.js';
 import { emptyGroupTally, emptyTally, mergeGroupTallies, mergeTallies, STEAM_BATCH_SIZES, STEAM_GROUP_SIZES, STEAM_QUESTION_IDS, STEAM_SORTS } from '../lib/steam.js';
 
 // Pages where you write questions. `custom` is the page labelled "Single" in the UI: it takes any question type.
 // The others are locked to one type each.
 export const PAGE_TYPE = { yesno: 'noul', score: 'score', choice: 'choice' };
 export const PAGES = ['custom', 'yesno', 'score', 'choice'];
-export const MODES = [...PAGES, 'batch', 'rank', 'steam', 'compare'];
+export const MODES = [...PAGES, 'batch', 'rank', 'steam', 'wikipedia', 'compare'];
 
 // A saved question set is a page of its own, addressed as `set:<id>`.
 export const isSetMode = (mode) => typeof mode === 'string' && mode.startsWith('set:');
@@ -16,6 +18,10 @@ export const setIdOf = (mode) => mode.slice('set:'.length);
 // A saved Steam analysis is a page of its own too, addressed as `steamsaved:<id>`.
 export const isSteamSavedMode = (mode) => typeof mode === 'string' && mode.startsWith('steamsaved:');
 export const steamSavedIdOf = (mode) => mode.slice('steamsaved:'.length);
+
+// A saved Wikipedia answer is a page of its own too, addressed as `wikipediasaved:<id>`.
+export const isWikipediaSavedMode = (mode) => typeof mode === 'string' && mode.startsWith('wikipediasaved:');
+export const wikipediaSavedIdOf = (mode) => mode.slice('wikipediasaved:'.length);
 
 const KEYS = {
   draft: 'jev-studio:draft:v1', // the Custom page (and the questions Batch uses)
@@ -29,6 +35,9 @@ const KEYS = {
   rank: 'jev-studio:rank:v1',
   steam: 'jev-studio:steam:v3', // v1 kept every review of one sample, v2 counted six topics; v3 counts each option of twenty, a different shape
   steamSaved: 'jev-studio:steamsaved:v1', // analyses saved from the Steam page: counts and where to carry on, not reviews
+  wikipedia: 'jev-studio:wikipedia:v1', // the question and settings on the Wikipedia answer page
+  wikipediaSaved: 'jev-studio:wikipediasaved:v1', // answers saved from it
+  wikipediaMenu: 'jev-studio:wikipediamenu:v1', // whether the saved answers under Wikipedia answer in the sidebar are shown
   mode: 'jev-studio:mode:v1',
 };
 const TOKENS_KEY = 'jev-studio:tokens:v1'; // per tab (sessionStorage): a running total for this visit
@@ -123,13 +132,17 @@ function steamSlice(stored) {
   };
 }
 
+const storedWikipedia = readStore(KEYS.wikipedia, {});
+const storedWikipediaSaved = cleanSavedAnswers(readStore(KEYS.wikipediaSaved, []));
+
 const storedSets = readStore(KEYS.sets, []);
 // A saved mode that is no longer a page (or a set that has since been deleted) falls back to the first page.
 const storedMode = readStore(KEYS.mode, 'custom');
 const modeStillExists =
   MODES.includes(storedMode) ||
   (isSetMode(storedMode) && storedSets.some((s) => s.id === setIdOf(storedMode))) ||
-  (isSteamSavedMode(storedMode) && storedSteamSaved.some((s) => s.id === steamSavedIdOf(storedMode)));
+  (isSteamSavedMode(storedMode) && storedSteamSaved.some((s) => s.id === steamSavedIdOf(storedMode))) ||
+  (isWikipediaSavedMode(storedMode) && storedWikipediaSaved.some((s) => s.id === wikipediaSavedIdOf(storedMode)));
 
 export const app = {
   mode: modeStillExists ? storedMode : 'custom',
@@ -161,6 +174,9 @@ export const app = {
   // the game; `batches` counts the ones read, including the current one.
   steam: steamSlice(storedSteam),
   steamSaved: storedSteamSaved,
+  // The Wikipedia answer page: the question typed, its settings (how far it looks), and the answers saved from it. An answer that
+  // has just been found is not kept (only what is saved is), and every saved link is checked to be on Wikipedia before it is used.
+  wikipedia: { question: typeof storedWikipedia.question === 'string' ? storedWikipedia.question : '', settings: cleanSettings(storedWikipedia.settings), saved: storedWikipediaSaved, menuOpen: readStore(KEYS.wikipediaMenu, true) },
   tokens: { ...emptyUsage(), ...readStore(TOKENS_KEY, {}, 'session') },
   status: { configured: false, mock: false, keySource: 'none' },
 };
@@ -179,6 +195,9 @@ export const save = {
   rank: () => writeWithRun(KEYS.rank, app.rank),
   steam: () => writeWithRun(KEYS.steam, app.steam),
   steamSaved: () => writeStore(KEYS.steamSaved, app.steamSaved), // false when the browser has no room
+  wikipedia: () => writeStore(KEYS.wikipedia, { question: app.wikipedia.question, settings: app.wikipedia.settings }),
+  wikipediaSaved: () => writeStore(KEYS.wikipediaSaved, app.wikipedia.saved), // false when the browser has no room
+  wikipediaMenu: () => writeStore(KEYS.wikipediaMenu, app.wikipedia.menuOpen),
 };
 
 const tokenListeners = new Set();

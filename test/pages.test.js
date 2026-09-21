@@ -1,9 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { BATCH_EXAMPLES, RANK_EXAMPLES, STEAM_EXAMPLES, TEMPLATES, TYPE_EXAMPLES } from '../public/templates.js';
+import { BATCH_EXAMPLES, RANK_EXAMPLES, STEAM_EXAMPLES, TEMPLATES, TYPE_EXAMPLES, WIKIPEDIA_EXAMPLES } from '../public/templates.js';
 import { emptyTally, parseSteamApp } from '../public/lib/steam.js';
 import { applyExpected, MAX_ITEMS, parseItems } from '../public/lib/batch.js';
 import { buildRankState } from '../public/lib/rank.js';
+import { searchTerms } from '../public/lib/wikipedia.js';
 import { blankDraft, buildRequest, draftFromRequest } from '../public/request.js';
 import { lintQuestion } from '../public/lib/lint.js';
 import { validateRequest } from '../src/validate.js';
@@ -13,7 +14,7 @@ test('there is a page for each question type, and each has examples', () => {
   assert.deepEqual(PAGES, ['custom', 'yesno', 'score', 'choice']);
   assert.deepEqual(PAGE_TYPE, { yesno: 'noul', score: 'score', choice: 'choice' });
   for (const page of Object.keys(PAGE_TYPE)) assert.ok(TYPE_EXAMPLES[page].length >= 2, `${page} has examples`);
-  assert.deepEqual(MODES, ['custom', 'yesno', 'score', 'choice', 'batch', 'rank', 'steam', 'compare']);
+  assert.deepEqual(MODES, ['custom', 'yesno', 'score', 'choice', 'batch', 'rank', 'steam', 'wikipedia', 'compare']);
 });
 
 test('every example on a typed page uses only that page\'s type, is valid, and gets no lint warnings', () => {
@@ -244,4 +245,21 @@ test('a saved Steam analysis is a page of its own, addressed as steamsaved:<id>,
   assert.deepEqual(app.steamSaved, []);
   assert.equal(app.steam.savedId, null);
   assert.equal(save.steamSaved(), false, 'saving reports false when there is no browser storage, rather than throwing');
+});
+
+test('wikipedia examples: unique names, each a question with something to search for', () => {
+  assert.ok(WIKIPEDIA_EXAMPLES.length >= 5);
+  assert.equal(new Set(WIKIPEDIA_EXAMPLES.map((e) => e.name)).size, WIKIPEDIA_EXAMPLES.length, 'the menu is keyed by index, so duplicates would confuse people');
+  for (const example of WIKIPEDIA_EXAMPLES) {
+    assert.ok(example.question.trim().endsWith('?'), example.name);
+    assert.ok(searchTerms(example.question).length >= 2, `${example.name}: there is a name in it to search for`);
+  }
+  assert.ok(WIKIPEDIA_EXAMPLES.some((e) => /mercury/i.test(e.question)), 'the ambiguous example is there');
+});
+
+test('the Wikipedia page keeps its question, and its saved answers start empty and are saved separately', () => {
+  assert.doesNotThrow(() => save.wikipedia());
+  assert.doesNotThrow(() => save.wikipediaSaved());
+  assert.equal(app.wikipedia.question, '');
+  assert.deepEqual(app.wikipedia.saved, []);
 });

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createApp } from '../src/server.js';
@@ -9,6 +9,7 @@ import { createKeyStore } from '../src/keystore.js';
 import { callSystemOne } from '../src/typesafe.js';
 import { mockResponse } from '../src/mock.js';
 import { TEMPLATES } from '../public/templates.js';
+import pkg from '../package.json' with { type: 'json' };
 
 /** A real encrypted key store in a throwaway folder (fixed secret, so no machine lookups). */
 function tempStore() {
@@ -27,9 +28,17 @@ const goodBody = () => ({
 const upstreamOk = { model: 'jev-1.13.0', answers: { urgent: { type: 'noul', noul: 0.9 } }, usage: { input_tokens: 1, output_tokens: 1 } };
 const jsonResponse = (status, body) => new Response(JSON.stringify(body), { status });
 
+// fetch() refuses to connect to these ports ("bad port"). The operating system picks a free one at random, and on a machine
+// whose dynamic range starts low that can be one of these, so a run would fail now and then for no reason: pick again.
+const FETCH_BLOCKED_PORTS = new Set([1719, 1720, 1723, 2049, 3659, 4045, 4190, 5060, 5061, 6000, 6566, 6665, 6666, 6667, 6668, 6669, 6679, 6697, 10080]);
+
 async function withServer(options, fn) {
   const server = createApp({ retryDelayMs: 1, ...options });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  while (FETCH_BLOCKED_PORTS.has(server.address().port)) {
+    await new Promise((resolve) => server.close(resolve));
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  }
   const base = `http://127.0.0.1:${server.address().port}`;
   try {
     await fn(base, server.address().port);
@@ -646,5 +655,229 @@ test("each review keeps the facts Jev is told, mapped from Steam's own fields, a
     assert.deepEqual([b.hoursTotal, b.hoursAtReview, b.hoursRecent], [null, null, null], 'playtime Steam did not report is null, not zero');
     assert.deepEqual(Object.keys(a).sort(), ['created', 'earlyAccess', 'freeCopy', 'hoursAtReview', 'hoursRecent', 'hoursTotal', 'id', 'refunded', 'steamDeck', 'text', 'votedUp', 'votesUp']);
     assert.doesNotMatch(text, /weighted|0.93|Someone Real|76561198|num_games_owned|votes_funny/, 'the rest of what Steam sends is not passed on');
+  });
+});
+
+/* ---------- Wikipedia ---------- */
+
+const wikiFixture = (name) => readFileSync(new URL(`./fixtures/wikipedia/${name}`, import.meta.url), 'utf8');
+const wikiPost = (base, route, body, headers = { 'Content-Type': 'application/json' }) =>
+  fetch(`${base}/api/wikipedia/${route}`, { method: 'POST', headers, body: typeof body === 'string' ? body : JSON.stringify(body) });
+const okJson = (text) => new Response(text, { status: 200 });
+
+/** A fake Wikipedia built from the saved replies. It records every request, and answers by what was asked for. */
+function fakeWikipedia({ extract = 'extract-paris.json', parse = 'parse-paris.json', search = 'search-how-big-is-paris.json' } = {}) {
+  const seen = [];
+  const fetchImpl = async (url, init) => {
+    const u = new URL(url);
+    seen.push({ url: u, init });
+    if (u.searchParams.get('list') === 'search') return okJson(wikiFixture(search));
+    if (u.searchParams.get('action') === 'parse') return okJson(wikiFixture(parse));
+    return okJson(wikiFixture(extract));
+  };
+  return { fetchImpl, seen };
+}
+
+test('search: asks Wikipedia with a descriptive User-Agent, and returns titles with plain-text snippets', async () => {
+  const { fetchImpl, seen } = fakeWikipedia();
+  await withServer({ apiKey: 'k', fetchImpl }, async (base) => {
+    const res = await wikiPost(base, 'search', { query: '  how   big is paris ', limit: 5 });
+    assert.equal(res.status, 200);
+    const { results } = await res.json();
+    assert.deepEqual(results.map((r) => r.title).slice(0, 3), ['How Big, How Blue, How Beautiful', 'Paris Is Burning (film)', 'Paris']);
+    assert.match(results[2].snippet, /^Paris is the capital and largest city of France, with an estimated city population of 2\.04 million in an area of 105\.4 km2 \(40\.7 sq mi\)/);
+    assert.doesNotMatch(JSON.stringify(results), /<span|searchmatch|\[update\]/);
+    assert.deepEqual(Object.keys(results[0]), ['title', 'snippet'], 'nothing else Wikipedia sends is passed on');
+
+    assert.equal(seen.length, 1);
+    assert.equal(seen[0].url.origin, 'https://en.wikipedia.org');
+    assert.equal(seen[0].url.pathname, '/w/api.php');
+    assert.equal(seen[0].url.searchParams.get('srsearch'), 'how big is paris');
+    assert.equal(seen[0].url.searchParams.get('srlimit'), '5');
+    assert.equal(seen[0].init.headers['User-Agent'], `JevStudio/${pkg.version} (https://github.com/SwiftFaze/Jev-Studio)`);
+  });
+});
+
+test('search: no results is an empty list, and the limit defaults to 8', async () => {
+  let seenUrl;
+  const fetchImpl = async (url) => ((seenUrl = new URL(url)), okJson('{"batchcomplete":true,"query":{"search":[]}}'));
+  await withServer({ apiKey: 'k', fetchImpl }, async (base) => {
+    const res = await wikiPost(base, 'search', { query: 'zzzzqqqq' });
+    assert.deepEqual(await res.json(), { results: [] });
+    assert.equal(seenUrl.searchParams.get('srlimit'), '8');
+  });
+});
+
+test('article: returns the infobox rows and the sections as sentences and tables, in two calls made one after the other', async () => {
+  const { fetchImpl, seen } = fakeWikipedia();
+  await withServer({ apiKey: 'k', fetchImpl }, async (base) => {
+    const res = await wikiPost(base, 'article', { title: 'Paris' });
+    assert.equal(res.status, 200);
+    const article = await res.json();
+    assert.deepEqual(Object.keys(article).sort(), ['disambiguation', 'infobox', 'sections', 'title', 'url']);
+    assert.equal(article.title, 'Paris');
+    assert.equal(article.url, 'https://en.wikipedia.org/wiki/Paris');
+    assert.equal(article.disambiguation, false);
+    assert.equal(article.infobox.find((r) => r.label === 'Area').value, '105.4 km2 (40.7 sq mi) • Urban 2,824.2 km2 (1,090.4 sq mi) • Metro 18,940.7 km2 (7,313.0 sq mi)');
+    assert.deepEqual(article.sections.map((s) => s.path).slice(0, 4), ['Lead', 'Etymology', 'Geography', 'Geography › Climate']);
+    assert.equal(article.sections[3].anchor, 'Climate');
+    assert.match(article.sections[0].sentences[0], /^Paris is the capital and largest city of France/);
+    assert.ok(article.sections.every((s) => s.sentences.length > 0 && s.sentences.every((x) => typeof x === 'string')));
+    assert.doesNotMatch(JSON.stringify(article), /<[a-z]+[ >]|&#\d+;|mw-parser-output/, "text only: none of Wikipedia's HTML is passed on");
+
+    assert.deepEqual(seen.map((r) => r.url.searchParams.get('action')), ['query', 'parse'], 'the extract, then the infobox');
+    assert.equal(seen[0].url.searchParams.get('titles'), 'Paris');
+    assert.equal(seen[0].url.searchParams.get('redirects'), '1');
+    assert.equal(seen[0].url.searchParams.get('explaintext'), '1');
+    assert.equal(seen[1].url.searchParams.get('section'), null, 'the whole article, so that its tables are there too');
+    assert.equal(seen[1].url.searchParams.get('page'), 'Paris');
+    assert.equal(seen[1].url.searchParams.get('disableeditsection'), '1');
+    for (const request of seen) assert.match(request.init.headers['User-Agent'], /^JevStudio\/\d+\.\d+\.\d+ \(https:\/\/github\.com\/SwiftFaze\/Jev-Studio\)$/);
+  });
+});
+
+test('article: a disambiguation page is reported as one, and the infobox is not fetched for it', async () => {
+  const { fetchImpl, seen } = fakeWikipedia({ extract: 'extract-mercury.json' });
+  await withServer({ apiKey: 'k', fetchImpl }, async (base) => {
+    const article = await (await wikiPost(base, 'article', { title: 'Mercury' })).json();
+    assert.equal(article.disambiguation, true);
+    assert.deepEqual(article.infobox, []);
+    assert.equal(seen.length, 1);
+  });
+});
+
+test('article: a title that does not exist is a 404, and one Wikipedia cannot parse still gives the text', async () => {
+  await withServer({ apiKey: 'k', fetchImpl: fakeWikipedia({ extract: 'extract-missing.json' }).fetchImpl }, async (base) => {
+    const res = await wikiPost(base, 'article', { title: 'Zzzz Not A Page Qqq' });
+    assert.equal(res.status, 404);
+    assert.match((await res.json()).error, /no Wikipedia article called "Zzzz Not A Page Qqq"/);
+  });
+  const fetchImpl = async (url) => okJson(new URL(url).searchParams.get('action') === 'parse' ? '{"error":{"code":"missingtitle","info":"The page you specified does not exist."}}' : wikiFixture('extract-paris.json'));
+  await withServer({ apiKey: 'k', fetchImpl }, async (base) => {
+    const res = await wikiPost(base, 'article', { title: 'Paris' });
+    assert.equal(res.status, 200);
+    const article = await res.json();
+    assert.deepEqual(article.infobox, []);
+    assert.ok(article.sections.length > 0);
+  });
+});
+
+test('Wikipedia routes: bad bodies are refused with 422 before Wikipedia is contacted', async () => {
+  let called = false;
+  const fetchImpl = async () => ((called = true), okJson('{}'));
+  await withServer({ apiKey: 'k', fetchImpl }, async (base) => {
+    for (const [route, body] of [
+      ['search', {}],
+      ['search', { query: '' }],
+      ['search', { query: '   ' }],
+      ['search', { query: 42 }],
+      ['search', { query: 'x'.repeat(201) }],
+      ['search', { query: 'a\u0000b' }],
+      ['search', { query: 'paris', limit: 0 }],
+      ['search', { query: 'paris', limit: 21 }],
+      ['search', { query: 'paris', limit: 2.5 }],
+      ['search', { query: 'paris', limit: '5' }],
+      ['article', {}],
+      ['article', { title: '' }],
+      ['article', { title: 7 }],
+      ['article', { title: 'x'.repeat(256) }],
+      ['article', { title: 'Paris|Rome' }],
+      ['article', { title: 'Paris#History' }],
+      ['article', { title: '<script>' }],
+      ['article', { title: 'a\u0000b' }],
+    ]) {
+      const res = await wikiPost(base, route, body);
+      assert.equal(res.status, 422, `${route} ${JSON.stringify(body)}`);
+      assert.ok((await res.json()).details.length > 0);
+    }
+    assert.equal((await wikiPost(base, 'search', '{not json')).status, 400);
+    assert.equal((await wikiPost(base, 'search', { query: 'x' }, { 'Content-Type': 'text/plain' })).status, 415);
+    assert.equal((await fetch(`${base}/api/wikipedia/search`)).status, 405);
+    assert.equal((await fetch(`${base}/api/wikipedia/article`, { method: 'PUT' })).status, 405);
+  });
+  assert.equal(called, false);
+});
+
+test('what is sent to Wikipedia is only the checked query or title, and never the TypeSafe key', async () => {
+  const { fetchImpl, seen } = fakeWikipedia();
+  await withServer({ apiKey: 'secret-key-value', fetchImpl }, async (base) => {
+    await wikiPost(base, 'search', { query: 'paris', extra: 'https://evil.example', host: 'evil.example' });
+    await wikiPost(base, 'article', { title: '../../etc/passwd' });
+    assert.ok(seen.length >= 2);
+    for (const request of seen) {
+      assert.equal(request.url.origin, 'https://en.wikipedia.org');
+      assert.doesNotMatch(JSON.stringify(request.init.headers), /secret-key-value|authorization/i);
+      assert.doesNotMatch(String(request.url), /secret-key-value|evil/);
+    }
+  });
+});
+
+test('reading Wikipedia needs no API key, and works in mock mode', async () => {
+  for (const options of [{ apiKey: '' }, { apiKey: '', mock: true }]) {
+    await withServer({ ...options, fetchImpl: fakeWikipedia().fetchImpl }, async (base) => {
+      assert.equal((await wikiPost(base, 'search', { query: 'paris' })).status, 200);
+      assert.equal((await wikiPost(base, 'article', { title: 'Paris' })).status, 200);
+    });
+  }
+});
+
+test('Wikipedia problems become readable errors: 429, other statuses 502, unreadable or error replies 502, network 502, timeout 504', async () => {
+  const cases = [
+    [async () => new Response('{}', { status: 429 }), 429, /limiting requests/],
+    [async () => new Response('{}', { status: 500 }), 502, /Wikipedia returned 500/],
+    [async () => new Response('<html>oops</html>', { status: 200 }), 502, /could not be read/],
+    [async () => okJson('{"error":{"code":"maxlag","info":"Waiting for a database server"}}'), 502, /Wikipedia said: Waiting for a database server/],
+    [async () => { throw new Error('ECONNRESET'); }, 502, /Could not reach Wikipedia: ECONNRESET/],
+    [async () => { throw Object.assign(new Error('timed out'), { name: 'TimeoutError' }); }, 504, /did not respond in time/],
+  ];
+  for (const [fetchImpl, status, message] of cases) {
+    for (const [route, body] of [['search', { query: 'paris' }], ['article', { title: 'Paris' }]]) {
+      await withServer({ apiKey: 'k', fetchImpl }, async (base) => {
+        const res = await wikiPost(base, route, body);
+        assert.equal(res.status, status, `${route} ${message}`);
+        assert.match((await res.json()).error, message);
+      });
+    }
+  }
+});
+
+test('a 429 on the second call of an article (the infobox) is still reported, not hidden as a missing infobox', async () => {
+  const fetchImpl = async (url) => (new URL(url).searchParams.get('action') === 'parse' ? new Response('{}', { status: 429 }) : okJson(wikiFixture('extract-paris.json')));
+  await withServer({ apiKey: 'k', fetchImpl }, async (base) => {
+    assert.equal((await wikiPost(base, 'article', { title: 'Paris' })).status, 429);
+  });
+});
+
+test('article: a table is read a row at a time, and a section that is only a table (which the plain text leaves out) is there too', async () => {
+  const { fetchImpl } = fakeWikipedia({ extract: 'extract-c4-picasso.json', parse: 'parse-c4-picasso.json' });
+  await withServer({ apiKey: 'k', fetchImpl }, async (base) => {
+    const article = await (await wikiPost(base, 'article', { title: 'Citroën C4 Picasso' })).json();
+    const paths = article.sections.map((s) => s.path);
+    assert.ok(paths.includes('Engines'), 'the Engines section has no text, only a table, and is not in the plain text');
+    assert.equal(paths.indexOf('Engines'), paths.indexOf('Second generation (2013–2022) › Transmissions') + 1, 'and it is where it is on the page');
+    const engines = article.sections.find((s) => s.path === 'Engines');
+    assert.deepEqual(engines.sentences, []);
+    assert.equal(engines.anchor, 'Engines');
+    assert.equal(engines.tables.length, 1);
+    assert.equal(engines.tables[0].caption, 'Engine range and spec');
+    assert.ok(engines.tables[0].headers.includes('Top speed'));
+    const vti = engines.tables[0].rows.find((r) => r.includes('1.6 litre VTi 16v'));
+    assert.match(vti, /Top speed: 187 km\/h \(116 mph\)/);
+    assert.match(vti, /^Petrol engines — Model: 1\.6 litre VTi 16v • Years: 2006–present/);
+
+    const sales = article.sections.find((s) => s.path === 'Sales');
+    assert.ok(sales.sentences.length > 0 && sales.tables.length === 1, 'a section with text and a table has both');
+    assert.equal(JSON.stringify(article).includes('Wanted'), false, 'the table under See also is left out');
+    assert.doesNotMatch(JSON.stringify(article), /<[a-z]+[ >]|&#\d+;/, 'text only');
+  });
+});
+
+test('article: when Wikipedia cannot parse the page, it is still read as text, with no tables', async () => {
+  const fetchImpl = async (url) => okJson(new URL(url).searchParams.get('action') === 'parse' ? '{"error":{"code":"x","info":"nope"}}' : wikiFixture('extract-c4-picasso.json'));
+  await withServer({ apiKey: 'k', fetchImpl }, async (base) => {
+    const article = await (await wikiPost(base, 'article', { title: 'Citroën C4 Picasso' })).json();
+    assert.ok(article.sections.length > 0);
+    assert.ok(article.sections.every((s) => s.tables.length === 0 && s.sentences.length > 0));
+    assert.deepEqual(article.infobox, []);
   });
 });

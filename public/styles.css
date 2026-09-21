@@ -595,3 +595,65 @@ dialog[open] { display: flex; flex-direction: column; gap: 10px; }
 
 .steam-questions > summary { display: flex; align-items: baseline; gap: 8px; }
 
+
+/* ===== Wikipedia answer ===== */
+#wikipedia-answer, #wikipedia-trail, #wikipediasaved-answer, #wikipediasaved-trail { display: flex; flex-direction: column; gap: 12px; }
+.wiki-question-text { margin: 0; font-size: 22px; line-height: 1.35; font-weight: 600; overflow-wrap: anywhere; }
+
+/* The answer, and only the answer. */
+.wiki-answer, .wiki-notfound { display: flex; flex-direction: column; gap: 10px; padding: 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg); }
+.wiki-answer.is-quick { border-style: dashed; }
+.wiki-answer.is-found { border: 2px solid var(--accent); background: var(--accent-soft); box-shadow: var(--shadow); }
+.wiki-answer.is-found .wiki-quote { font-size: 20px; line-height: 1.5; font-weight: 600; }
+.wiki-answer.is-found .wiki-source { color: var(--text); }
+.wiki-notfound { background: var(--warn-soft); color: var(--warn); border-color: transparent; }
+.wiki-notfound .muted, .wiki-notfound .hint { color: inherit; opacity: 0.85; }
+.wiki-notfound .wiki-quote { color: var(--text); }
+.wiki-tag { margin: 0; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); font-weight: 700; }
+.wiki-quote { margin: 0; padding: 2px 0 2px 12px; border-left: 3px solid var(--accent); font-size: 16px; line-height: 1.5; overflow-wrap: anywhere; }
+.wiki-source { margin: 0; color: var(--muted); }
+.wiki-source a { color: var(--accent); }
+
+/* How Jev got there: what the run cost, then each step as the same card the Single page draws. */
+.wiki-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px; }
+.wiki-stat { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg); min-width: 0; }
+.wiki-stat.is-wide { grid-column: 1 / -1; }
+.wiki-stat-label { font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
+.wiki-stat-value { font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.wiki-stat.is-wide .wiki-stat-value { font-size: 15px; font-weight: 600; }
+.wiki-steps { display: flex; flex-direction: column; gap: 12px; }
+.wiki-step { display: flex; flex-direction: column; gap: 8px; }
+.wiki-fold-tools { display: flex; gap: 6px; justify-content: flex-end; }
+/* A step is folded by default: one line saying what Jev picked and how sure it was; open it for the whole card. */
+.wiki-fold { border: 1px solid var(--border); border-radius: 10px; background: var(--bg); }
+.wiki-fold > summary { display: flex; align-items: baseline; gap: 12px; padding: 10px 12px; cursor: pointer; list-style: none; }
+.wiki-fold > summary::-webkit-details-marker { display: none; }
+.wiki-fold > summary::before { content: "▸"; flex: none; width: 1em; color: var(--muted); }
+.wiki-fold[open] > summary::before { content: "▾"; }
+.wiki-fold > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 10px; }
+.wiki-fold-title { flex: none; font-family: var(--mono); font-size: 13px; font-weight: 600; color: var(--muted); }
+.wiki-fold-label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wiki-fold[open] > summary .wiki-fold-label { white-space: normal; overflow-wrap: anywhere; }
+.wiki-fold-pct { flex: none; font-weight: 700; font-variant-numeric: tabular-nums; }
+.wiki-fold.is-chosen { border: 2px solid var(--accent); background: var(--accent-soft); }
+.wiki-fold-body { display: flex; flex-direction: column; gap: 8px; padding: 0 12px 12px; }
+.wiki-fold .a-card { background: var(--panel); }
+.wiki-fold.is-chosen .a-card { background: transparent; }
+.wiki-fold .prob-list { max-height: 520px; overflow-y: auto; padding-right: 8px; } /* every option is listed; a long list scrolls inside its card */
+.wiki-fold-body > .a-card:first-child .a-head { display: none; } /* the header line above already names the step */
+.wiki-step .prob-label { overflow-wrap: anywhere; }
+.wiki-note { margin: 0; }
+.wiki-slim { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; padding: 8px 12px; border: 1px dashed var(--border); border-radius: 10px; }
+.wiki-slim-title { font-family: var(--mono); font-size: 13px; font-weight: 600; color: var(--muted); }
+.wiki-slim-label { flex: 1 1 200px; min-width: 0; overflow-wrap: anywhere; }
+.wiki-slim-pct { font-weight: 700; font-variant-numeric: tabular-nums; }
+.wiki-slim.is-pending { border-style: solid; }
+
+/* Settings */
+.wiki-settings { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px 24px; }
+.wiki-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.wiki-field .hint { margin: 0; }
+.wiki-field-label { font-weight: 600; font-size: 14px; }
+.wiki-field-row { display: flex; align-items: center; gap: 12px; }
+.wiki-number { width: 96px; flex: none; }
+.wiki-number:disabled { opacity: 0.5; }

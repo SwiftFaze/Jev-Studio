@@ -1,12 +1,14 @@
 import { h } from './dom.js';
-import { BATCH_EXAMPLES, RANK_EXAMPLES, STEAM_EXAMPLES, TEMPLATES, TYPE_EXAMPLES } from './templates.js';
+import { BATCH_EXAMPLES, RANK_EXAMPLES, STEAM_EXAMPLES, TEMPLATES, TYPE_EXAMPLES, WIKIPEDIA_EXAMPLES } from './templates.js';
 import { draftFromRequest, questionsFromApi, stateToText } from './request.js';
-import { app, hasQuestionWork, isSetMode, isSteamSavedMode, MODES, onTokens, PAGES, PAGE_TYPE, save, setIdOf, steamSavedIdOf } from './ui/state.js';
+import { app, hasQuestionWork, isSetMode, isSteamSavedMode, isWikipediaSavedMode, MODES, onTokens, PAGES, PAGE_TYPE, save, setIdOf, steamSavedIdOf, wikipediaSavedIdOf } from './ui/state.js';
 import { initBuilder, renderBuilder, setBuilderPage } from './ui/builder.js';
 import { createWorkspace } from './ui/workspace.js';
 import { createSetPage } from './ui/setpage.js';
 import { initBulk } from './ui/bulk.js';
 import { initSteam } from './ui/steam.js';
+import { initWikipedia } from './ui/wikipedia.js';
+import { createWikipediaSavedPage, renderWikipediaSavedMenu, toggleWikipediaSavedMenu } from './ui/wikipedia-saved.js';
 import { createSteamSavedPage, renderSteamSavedMenu, toggleSteamSavedMenu } from './ui/steam-saved.js';
 import { getBatch } from './ui/idb.js';
 import { fieldsFromSaved } from './lib/steam.js';
@@ -24,12 +26,13 @@ const workspaces = {}; // one per question page: custom, yesno, score, choice
 const bulk = {};
 let setPage = null; // the page that serves every saved question set
 let steamSavedPage = null; // the page that serves every saved Steam analysis
+let wikipediaSavedPage = null; // the page that serves every saved Wikipedia answer
 let newQueryFor = {}; // which containers a mode uses -> its "New query" action
 let measureBars = null;
 
-/** Every saved set shares one set of containers (`mode-set`, `pane-set`, `runbar-set`). */
-const keyOf = (mode) => (isSetMode(mode) ? 'set' : isSteamSavedMode(mode) ? 'steamsaved' : mode);
-const CONTAINER_KEYS = [...MODES, 'set', 'steamsaved'];
+/** Every saved set shares one set of containers (`mode-set`, `pane-set`, `runbar-set`); so does every saved Steam analysis, and every saved Wikipedia answer. */
+const keyOf = (mode) => (isSetMode(mode) ? 'set' : isSteamSavedMode(mode) ? 'steamsaved' : isWikipediaSavedMode(mode) ? 'wikipediasaved' : mode);
+const CONTAINER_KEYS = [...MODES, 'set', 'steamsaved', 'wikipediasaved'];
 
 /**
  * The header and the bottom bar are pinned, so tell the CSS how tall they are: scroll targets and keyboard focus
@@ -54,7 +57,13 @@ function trackBars() {
 /* ---------- pages ---------- */
 
 function setMode(mode) {
-  const known = isSetMode(mode) ? app.sets.some((s) => s.id === setIdOf(mode)) : isSteamSavedMode(mode) ? app.steamSaved.some((a) => a.id === steamSavedIdOf(mode)) : MODES.includes(mode);
+  const known = isSetMode(mode)
+    ? app.sets.some((s) => s.id === setIdOf(mode))
+    : isSteamSavedMode(mode)
+      ? app.steamSaved.some((a) => a.id === steamSavedIdOf(mode))
+      : isWikipediaSavedMode(mode)
+        ? app.wikipedia.saved.some((a) => a.id === wikipediaSavedIdOf(mode))
+        : MODES.includes(mode);
   if (!known) mode = 'custom';
   app.mode = mode;
   save.mode();
@@ -63,6 +72,7 @@ function setMode(mode) {
   const isPage = PAGES.includes(mode);
   const isSet = key === 'set';
   const isSteamSaved = key === 'steamsaved';
+  const isWikipediaSaved = key === 'wikipediasaved';
 
   for (const k of CONTAINER_KEYS) {
     $(`#mode-${k}`).hidden = k !== key;
@@ -76,9 +86,10 @@ function setMode(mode) {
   if (isPage || mode === 'batch') setBuilderPage(mode);
   if (isSet) setPage.open(setIdOf(mode));
   if (isSteamSaved) steamSavedPage.open(steamSavedIdOf(mode));
+  if (isWikipediaSaved) wikipediaSavedPage.open(wikipediaSavedIdOf(mode));
 
   // How the page is laid out and in what order (see the CSS): questions / input / answers, input / questions / results, ...
-  const kind = isPage ? 'page' : isSet ? 'set' : mode === 'compare' || isSteamSaved ? 'compare' : 'bulk';
+  const kind = isPage ? 'page' : isSet ? 'set' : mode === 'compare' || isSteamSaved || isWikipediaSaved ? 'compare' : 'bulk';
   $('#layout').dataset.kind = kind;
 
   // Controls that do not apply are made invisible rather than removed, so nothing else on screen moves.
@@ -147,8 +158,8 @@ function editSet(id) {
 
 /* ---------- examples ---------- */
 
-const examplesFor = (mode) => (mode === 'custom' ? TEMPLATES : mode === 'rank' ? RANK_EXAMPLES : mode === 'batch' ? BATCH_EXAMPLES : mode === 'steam' ? STEAM_EXAMPLES : (TYPE_EXAMPLES[mode] ?? []));
-const hasExamples = (mode) => PAGES.includes(mode) || mode === 'rank' || mode === 'batch' || mode === 'steam';
+const examplesFor = (mode) => (mode === 'custom' ? TEMPLATES : mode === 'rank' ? RANK_EXAMPLES : mode === 'batch' ? BATCH_EXAMPLES : mode === 'steam' ? STEAM_EXAMPLES : mode === 'wikipedia' ? WIKIPEDIA_EXAMPLES : (TYPE_EXAMPLES[mode] ?? []));
+const hasExamples = (mode) => PAGES.includes(mode) || mode === 'rank' || mode === 'batch' || mode === 'steam' || mode === 'wikipedia';
 
 function renderExampleMenu(mode) {
   const select = $('#template');
@@ -175,6 +186,11 @@ function setupExamples() {
     if (page === 'steam') {
       if (bulk.steam.hasWork() && !confirm('Replace the current link, reviews and results?')) return;
       bulk.steam.load({ url: STEAM_EXAMPLES[Number(value)].url });
+      return;
+    }
+    if (page === 'wikipedia') {
+      if (bulk.wikipedia.hasWork() && !confirm('Replace the current question and answer?')) return;
+      bulk.wikipedia.load({ question: WIKIPEDIA_EXAMPLES[Number(value)].question });
       return;
     }
     if (page === 'batch') {
@@ -261,10 +277,21 @@ setPage = createSetPage({ onCompare: openComparison });
 steamSavedPage = createSteamSavedPage({ onContinue: continueSteam, onDeleted: () => setMode('steam') });
 renderSteamSavedMenu();
 document.querySelector('#steam-toggle').addEventListener('click', toggleSteamSavedMenu);
+// A saved Wikipedia answer is a page of its own: Ask again goes to the Wikipedia answer page with its question, and Remove goes back there too.
+wikipediaSavedPage = createWikipediaSavedPage({
+  onAskAgain: (question) => {
+    setMode('wikipedia');
+    bulk.wikipedia.load({ question });
+  },
+  onRemoved: () => setMode('wikipedia'),
+});
+renderWikipediaSavedMenu();
+document.querySelector('#wikipedia-toggle').addEventListener('click', toggleWikipediaSavedMenu);
 initBuilder();
 bulk.batch = initBulk('batch', { openCsv: openCsvDialog });
 bulk.rank = initBulk('rank');
 bulk.steam = initSteam();
+bulk.wikipedia = initWikipedia();
 initCompare();
 initSidebar({ onNavigate: setMode });
 initSaveSet({ onSetsChanged });
@@ -287,11 +314,11 @@ initApiKey({
 });
 
 // What "New query" does on each kind of page; Compare has nothing to clear.
-newQueryFor = { batch: () => bulk.batch.reset(), rank: () => bulk.rank.reset(), steam: () => bulk.steam.reset(), set: () => setPage.newQuery() };
+newQueryFor = { batch: () => bulk.batch.reset(), rank: () => bulk.rank.reset(), steam: () => bulk.steam.reset(), wikipedia: () => bulk.wikipedia.reset(), set: () => setPage.newQuery() };
 for (const page of PAGES) newQueryFor[page] = workspaces[page].newQuery;
 $('#new-query').addEventListener('click', () => newQueryFor[keyOf(app.mode)]?.());
 
-const runners = { batch: () => bulk.batch.start(), rank: () => bulk.rank.start(), steam: () => bulk.steam.start(), set: () => setPage.run() };
+const runners = { batch: () => bulk.batch.start(), rank: () => bulk.rank.start(), steam: () => bulk.steam.start(), wikipedia: () => bulk.wikipedia.start(), set: () => setPage.run() };
 for (const page of PAGES) runners[page] = workspaces[page].run;
 document.addEventListener('keydown', (e) => {
   const run = runners[keyOf(app.mode)];
