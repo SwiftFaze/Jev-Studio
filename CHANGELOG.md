@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.0](https://github.com/SwiftFaze/Jev-Studio/compare/v0.2.0...v0.3.0) (2026-09-20)
+
+
+### Features
+
+* add a Steam reviews page that analyses a game's reviews with Jev ([#8](https://github.com/SwiftFaze/Jev-Studio/issues/8)) ([05c0166](https://github.com/SwiftFaze/Jev-Studio/commit/05c0166db2415caeb9be6f06d14732d28d2f4b7b))
+* choose which Steam questions Jev is asked, and read reviews in groups to cut the cost ([#10](https://github.com/SwiftFaze/Jev-Studio/issues/10)) ([8a2963c](https://github.com/SwiftFaze/Jev-Studio/commit/8a2963c693c6a14b95ee895508c5721c6c809e2d))
+
 ## [0.2.0](https://github.com/SwiftFaze/Jev-Studio/compare/v0.1.0...v0.2.0) (2026-09-20)
 
 
