@@ -5,6 +5,7 @@ import { DEFAULT_MODEL, validateRequest } from './validate.js';
 import { callSystemOne } from './typesafe.js';
 import { mockResponse } from './mock.js';
 import { fetchSteamReviews, SteamError, validateSteamRequest } from './steam.js';
+import { fetchArticle, searchWikipedia, validateArticleRequest, validateSearchRequest, WikipediaError } from './wikipedia.js';
 import { diskAssets, isPackaged, packagedAssets } from './assets.js';
 import { checkKey, maskKey } from '../public/lib/apikey.js';
 
@@ -175,6 +176,32 @@ export function createApp({
     }
   }
 
+  /**
+   * Wikipedia cannot be called from the page either (the Content-Security-Policy, and Wikimedia wants a User-Agent that
+   * a browser cannot set), so the page asks here. Like Steam, it needs no key and works in mock mode: only Jev is mocked.
+   * `validate` checks the body, and `work` does the call with what it accepted.
+   */
+  async function wikipedia(req, res, validate, work) {
+    if (!requireJson(req)) return sendJson(res, 415, { error: 'Content-Type must be application/json.' });
+
+    let body;
+    try {
+      body = await readJson(req);
+    } catch (err) {
+      return sendJson(res, err.status ?? 400, { error: err.message });
+    }
+
+    const checked = validate(body);
+    if (!checked.ok) return sendJson(res, 422, { error: 'Invalid request', details: checked.errors });
+
+    try {
+      return sendJson(res, 200, await work(checked.value, { fetchImpl }));
+    } catch (err) {
+      if (err instanceof WikipediaError) return sendJson(res, err.status, { error: err.message });
+      return sendJson(res, 502, { error: `Could not read Wikipedia: ${err.message}` });
+    }
+  }
+
   /** PUT saves (encrypts) the key from the request body, DELETE forgets it. Both answer with the new status. */
   async function manageKey(req, res) {
     if (!keyStore) return sendJson(res, 501, { error: 'This build cannot store an API key.' });
@@ -241,6 +268,10 @@ export function createApp({
     if (pathname === '/api/steam/reviews') {
       if (req.method !== 'POST') return sendJson(res, 405, { error: 'Method not allowed.' });
       return steamReviews(req, res);
+    }
+    if (pathname === '/api/wikipedia/search' || pathname === '/api/wikipedia/article') {
+      if (req.method !== 'POST') return sendJson(res, 405, { error: 'Method not allowed.' });
+      return pathname.endsWith('/search') ? wikipedia(req, res, validateSearchRequest, searchWikipedia) : wikipedia(req, res, validateArticleRequest, fetchArticle);
     }
     if (pathname === '/api/key') {
       if (req.method !== 'PUT' && req.method !== 'DELETE') return sendJson(res, 405, { error: 'Method not allowed.' });

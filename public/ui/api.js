@@ -35,6 +35,12 @@ export async function postRun(request, signal) {
 /** Ask the server to read a game's Steam reviews. Resolves with `{ appId, name, summary, reviews }`. */
 export const postSteamReviews = (request, signal) => call('/api/steam/reviews', { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify(request) }, signal);
 
+/** Ask the server to search Wikipedia. Resolves with `{ results: [{ title, snippet }] }`. */
+export const postWikipediaSearch = (request, signal) => call('/api/wikipedia/search', { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify(request) }, signal);
+
+/** Ask the server to read an article. Resolves with `{ title, url, disambiguation, infobox, sections }`, all text. */
+export const postWikipediaArticle = (request, signal) => call('/api/wikipedia/article', { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify(request) }, signal);
+
 /** Hand a pasted API key to the server, which encrypts and stores it. Resolves with the new status. */
 export const saveKey = (key) => call('/api/key', { method: 'PUT', headers: JSON_HEADERS, body: JSON.stringify({ key }) });
 
