@@ -109,6 +109,19 @@ test('splitSentences reads each line on its own, and skips empty lines', () => {
   assert.deepEqual(splitSentences(undefined), []);
 });
 
+test('splitSentences joins a stray mid-sentence newline (where a citation reference used to be) back into one sentence', () => {
+  // Confirmed live against Wikipedia's real extract for one article: "...confidence\nscores. Its output..." — a bare
+  // newline was left where a footnote reference had been, splitting "confidence scores." into two ungrammatical
+  // fragments ("confidence" and "scores.") that then became a truncated final answer.
+  assert.deepEqual(
+    splitSentences('It returns probability estimates and confidence\nscores. Its output is read by a\nperson. \nA new paragraph starts here.'),
+    ['It returns probability estimates and confidence scores.', 'Its output is read by a person.', 'A new paragraph starts here.'],
+  );
+  // A line ending in punctuation, or one followed by an uppercase start, is a real break — not joined.
+  assert.deepEqual(splitSentences('Ends here.\nStarts here'), ['Ends here.', 'Starts here']);
+  assert.deepEqual(splitSentences('No stop\nStarts uppercase.'), ['No stop', 'Starts uppercase.']);
+});
+
 test('splitSentences on the Paris lead keeps the sentence with the area whole', () => {
   const [first] = splitSentences(splitSections(parisExtract())[0].text);
   assert.match(first, /an area of 105\.4 km2 \(40\.7 sq mi\), as of January 2026, and a metropolitan population of 13\.3 million \(2023\)\.$/);
@@ -268,16 +281,17 @@ test('the answer request keeps to 250 options a Choice, in chunks, each with its
   assert.equal(enormous.chunks.length, 4, 'a part is cut off after four chunks');
 });
 
-test('the answer request folds step 3\'s "what is it asking for" into its own instructions, when given', () => {
+test('the answer request writes the question, article and part into the instructions itself, not as `backtick` placeholders (confirmed live to rank far more decisively); `state` still carries them, for the trail and "Open in Single"', () => {
   const candidates = [{ text: 'Sentence.', before: '', after: '' }];
-  const plain = buildAnswerRequest('q', 'Paris', 'History', candidates);
-  assert.equal(plain.request.questions.answer0.instructions, 'Which of these sentences, from the part `part` of the article `article`, states the answer to `question`?');
+  const plain = buildAnswerRequest('How big is Paris?', 'Paris', 'History', candidates);
+  assert.equal(plain.request.questions.answer0.instructions, 'Which of these sentences, from the part "History" of the article "Paris", states the answer to "How big is Paris?"?');
+  assert.deepEqual(plain.request.state, { question: 'How big is Paris?', article: 'Paris', part: 'History' });
 
-  const withMeaning = buildAnswerRequest('q', 'Paris', 'History', candidates, 'An explanation or a description');
+  const withMeaning = buildAnswerRequest('How big is Paris?', 'Paris', 'History', candidates, 'An explanation or a description');
   OK(withMeaning.request, 'answer request with meaning');
   assert.equal(
     withMeaning.request.questions.answer0.instructions,
-    'Which of these sentences, from the part `part` of the article `article`, states the answer to `question`, which is asking for an explanation or a description?',
+    'Which of these sentences, from the part "History" of the article "Paris", is an explanation or a description for "How big is Paris?"?',
   );
 });
 

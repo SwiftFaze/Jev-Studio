@@ -166,13 +166,31 @@ const ABBREVIATION = /(?:^|[\s(])(?:St|Mt|Mr|Mrs|Ms|Dr|Prof|Jr|Sr|Gen|Col|Lt|Cap
 const INITIAL = /(?:^|[\s(])\p{Lu}\.$/u;
 const segmenter = new Intl.Segmenter('en', { granularity: 'sentence' });
 
+// A line with no sentence-ending punctuation, immediately followed (no blank line between them) by a line starting
+// with a lowercase letter, is a wrapped line, not a real line break — Wikipedia's plain-text extract sometimes leaves
+// a stray newline where a citation reference used to be ("...confidence\nscores." for "...confidence scores."). Joined
+// back into one line before sentences are found in it; a blank line, or the next line starting uppercase, is still a
+// real break (so "First line" on its own, or a genuine new paragraph, is untouched).
+const ENDS_SENTENCE = /[.!?]['"”’)\]]*$/;
+function joinWrappedLines(rawLines) {
+  const lines = [];
+  for (const raw of rawLines) {
+    const trimmed = raw.trim();
+    const prev = lines.at(-1);
+    if (trimmed && prev && !ENDS_SENTENCE.test(prev) && /^[a-z]/.test(trimmed)) lines[lines.length - 1] = `${prev} ${trimmed}`;
+    else lines.push(trimmed);
+  }
+  return lines;
+}
+
 /**
- * The sentences of some text, in order. Every line is read on its own (a line of a list is one entry). Decimals such as
- * `105.4`, abbreviations such as `St.` and `c.`, initials, and `[3]`-style marks do not confuse it, and it needs no library.
+ * The sentences of some text, in order. Every line is read on its own (a line of a list is one entry), once a wrapped
+ * line (see `joinWrappedLines`) is put back together. Decimals such as `105.4`, abbreviations such as `St.` and `c.`,
+ * initials, and `[3]`-style marks do not confuse it, and it needs no library.
  */
 export function splitSentences(text) {
   const out = [];
-  for (const line of String(text ?? '').split(/\r?\n/)) {
+  for (const line of joinWrappedLines(String(text ?? '').split(/\r?\n/))) {
     const clean = squash(stripNoteMarks(line));
     if (!clean) continue;
     let carry = '';
@@ -808,14 +826,23 @@ export function buildAnswerRequest(question, title, partLabel, candidates, meani
   const chunks = [];
   for (let i = 0; i < candidates.length && chunks.length < MAX_CHUNKS; i += MAX_CHOICES) chunks.push(candidates.slice(i, i + MAX_CHOICES));
   const questions = {};
-  const asks = meaning ? `states the answer to \`question\`, which is asking for ${lowerFirst(meaning)}` : 'states the answer to `question`';
+  // Confirmed live, twice, by hand: the backtick form below — "states the answer to `question`, which is asking for
+  // an explanation or a description" — produced a near three-way tie between the right candidate, a wrong-but-
+  // plausible one, and "none" on real candidates, letting the wrong one win narrowly and pass the check. The same
+  // candidates, asked "is an explanation or a description for <the literal question text, quoted>" — the question
+  // written directly into the instructions rather than left as `` `question` `` for `state` to fill in — gave a
+  // decisive result both times. `state` still carries `question`/`article`/`part` (for the trail and "Open in
+  // Single"); only what Jev is actually asked changes. Not yet confirmed for every `meaningOptions` phrasing, only
+  // "an explanation or a description" — nor isolated from `state` also being a plain string in both live tests
+  // rather than this object, which may be part of it too.
+  const asks = meaning ? `is ${lowerFirst(meaning)} for "${question}"` : `states the answer to "${question}"`;
   const aboutNote = about ? ' (`about` is a short excerpt describing the subject, for context.)' : '';
   const state = { question, article: title, part: partLabel };
   if (about) state.about = about;
   chunks.forEach((chunk, c) => {
     questions[`answer${c}`] = {
       type: 'choice',
-      instructions: `Which of these sentences, from the part \`part\` of the article \`article\`, ${asks}?${aboutNote}`,
+      instructions: `Which of these sentences, from the part "${partLabel}" of the article "${title}", ${asks}?${aboutNote}`,
       criteria: { ...indexKeys('c', chunk, (cand) => cand.text), none: 'None of these states the answer' },
     };
   });
