@@ -83,6 +83,45 @@ export function parseSetFile(text) {
 export const editPageOf = (set) => (set?.origin === 'batch' ? 'batch' : 'custom');
 export const EDIT_PAGE_LABEL = { custom: 'Single', batch: 'Batch' };
 
+/**
+ * Whether opening a set just shows it, rather than giving it a page that runs it. A set saved from Batch runs each
+ * pasted line as its own item against its questions, which only the Batch page does, so its own page has nothing to
+ * run: it shows what is in the set, and Batch is one button away. Every other set opens on a page that does run it.
+ */
+export const isViewOnly = (set) => editPageOf(set) === 'batch';
+
+export const QUESTION_TYPE_LABEL = { choice: 'Choice', noul: 'Yes / No', score: 'Score' };
+
+/**
+ * A set's questions in the shape a read-only view draws: the id, the type and its label, the question itself, and
+ * whatever that type carries — a choice's options (key and description), a score's levels in order, or a yes / no's
+ * true / false descriptions when it was given them. Order is the set's own. Anything malformed is described as far as
+ * it goes rather than dropped: this only ever shows a set, so it must never be the thing that fails.
+ */
+export function describeQuestions(questions) {
+  return Object.entries(isObject(questions) ? questions : {}).map(([id, q]) => {
+    const type = TYPES.has(q?.type) ? q.type : null;
+    const out = {
+      id,
+      type,
+      label: type ? QUESTION_TYPE_LABEL[type] : 'Unknown type',
+      instructions: typeof q?.instructions === 'string' ? q.instructions : '',
+      options: [],
+      levels: [],
+    };
+    const criteria = q?.criteria;
+    if (type === 'choice' && isObject(criteria)) {
+      out.options = Object.entries(criteria).map(([key, desc]) => ({ key, desc: typeof desc === 'string' ? desc : '' }));
+    } else if (type === 'score' && Array.isArray(criteria)) {
+      out.levels = criteria.filter((level) => typeof level === 'string');
+    } else if (type === 'noul' && isObject(criteria)) {
+      // Only the two the API allows, and only when they are really there: a yes / no usually has no criteria at all.
+      out.options = ['true', 'false'].filter((key) => typeof criteria[key] === 'string').map((key) => ({ key, desc: criteria[key] }));
+    }
+    return out;
+  });
+}
+
 /** Add a set, replacing one with the same name (case-insensitive). Newest first. `origin: 'batch'` marks a set saved from Batch. */
 export function upsertSet(sets, name, questions, { description = '', origin = null, now = Date.now() } = {}) {
   const clean = name.trim();

@@ -1,5 +1,5 @@
 import { h } from '../dom.js';
-import { app, hasQuestionWork, save } from './state.js';
+import { app, save } from './state.js';
 import { EDIT_PAGE_LABEL, editPageOf, exportSet, parseSetFile, removeSet, upsertSet } from '../lib/library.js';
 import { analyzeCsv, guessHeader, itemsFromCsv } from '../lib/batch.js';
 import { downloadText } from './download.js';
@@ -93,12 +93,8 @@ function renderSets(hooks, message = '', isError = false) {
         type: 'button',
         class: 'btn btn-sm',
         title: `Put this set's questions into the ${EDIT_PAGE_LABEL[editPageOf(set)]} page, where you can see and change them`,
-        onclick: () => {
-          const page = editPageOf(set);
-          if (hasQuestionWork(app.drafts[page]) && !confirm(`Replace the questions on the ${EDIT_PAGE_LABEL[page]} page with "${set.name}"?`)) return;
-          hooks.editSet(set.id);
-          dialog.close();
-        },
+        // `editSet` asks before replacing that page's questions; the dialog stays open when the answer was no.
+        onclick: () => hooks.editSet(set.id) && dialog.close(),
       }, `Edit in ${EDIT_PAGE_LABEL[editPageOf(set)]}`),
       h('button', {
         type: 'button',
@@ -123,7 +119,7 @@ function renderSets(hooks, message = '', isError = false) {
 
   body.replaceChildren(
     ...[
-      h('p', { class: 'hint' }, 'Each saved set appears under Question sets in the side menu and opens as its own page: paste some context, ask, read the answers. Its questions are fixed there. Use Edit to see or change them: sets saved from Batch open in Batch, all others in Single. To save a new set, use the Save button in the bottom bar.'),
+      h('p', { class: 'hint' }, 'Each saved set appears under Question sets in the side menu and opens as its own page. A set saved from Batch is shown read-only there — its questions, and a button that opens them in Batch, the only page that runs items one at a time. Every other set gets a page that runs it: paste some context, ask, read the answers, with its questions fixed. Use Edit to change a set\'s questions, on Batch or on Single. To save a new set, use the Save button in the bottom bar.'),
       message && h('p', { class: isError ? 'error' : 'notice-ok', role: 'status' }, message),
       app.sets.length === 0 ? h('p', { class: 'muted' }, 'No saved sets yet.') : h('div', { class: 'set-list' }, rows),
       h('div', {}, h('button', { type: 'button', class: 'btn btn-ghost btn-sm', onclick: () => fileInput.click() }, 'Import from file…'), fileInput),

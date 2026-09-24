@@ -247,6 +247,8 @@ dialog[open] { display: flex; flex-direction: column; gap: 10px; }
 #layout[data-kind="compare"] [id^="pane-"] { order: 2; }
 #layout[data-kind="set"] .mode > .panel { order: 1; }
 #layout[data-kind="set"] [id^="pane-"] { order: 2; }
+/* A set shown read-only is the only page with nothing in the results column: its panel is the whole page. */
+#layout[data-kind="setview"] .mode > .panel { order: 1; }
 /* Invisible but still taking its space, so hiding a control never shifts its neighbours. */
 .ghosted { visibility: hidden; }
 .panel[hidden], .runbar[hidden], [hidden] { display: none !important; }
@@ -492,6 +494,10 @@ dialog[open] { display: flex; flex-direction: column; gap: 10px; }
 #layout[data-kind="set"] .mode > .panel textarea { flex: 1 1 auto; min-height: 260px; }
 .set-description { color: var(--text); font-size: 15px; }
 .set-desc { color: var(--muted); }
+
+/* A set saved from Batch, shown read-only: the questions as text, in the same cards the builder uses to edit them. */
+.setview-instructions { margin: 0; overflow-wrap: anywhere; }
+.setview-options .mono { font-weight: 600; }
 
 /* ===== Steam reviews ===== */
 /* The results column is two sections with no box of their own; they sort after the input like every other results panel. */

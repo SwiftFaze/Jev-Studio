@@ -45,6 +45,20 @@ export function openSaveSet() {
   const count = questions ? Object.keys(questions).length : 0;
   // Questions that came from a set (Edit in Single or Batch) or were saved before are linked to it, so its details are prefilled.
   const linked = app.sets.find((s) => s.id === draft.setId);
+  // What the set's own page will be, which is what the description is for: a set saved from Batch opens read-only,
+  // with no context box to describe (see setview.js); every other one opens on a page that runs it on pasted text.
+  const fromBatch = currentPage() === 'batch';
+  const COPY = fromBatch
+    ? {
+        lede: `Saves the questions on this page (${plural(count, 'question')}) as a question set. It becomes a page in the side menu that shows these questions, and opens them in Batch when you want to run them.`,
+        descriptionLabel: "Description (optional): shown on the set's page, above the questions",
+        descriptionHint: 'What are these questions for? For example: Each row is one support ticket; they are triaged by team and urgency.',
+      }
+    : {
+        lede: `Saves the questions on this page (${plural(count, 'question')}) as a question set. Each set becomes a page in the side menu, with a context box for whatever you paste.`,
+        descriptionLabel: "Description (optional): shown on the set's page, above the context box",
+        descriptionHint: 'What should be pasted into the context box? For example: Paste the contents of your article and they will be tested for bias.',
+      };
 
   const nameInput = h('input', {
     class: 'text',
@@ -60,7 +74,7 @@ export function openSaveSet() {
     rows: 3,
     maxLength: MAX_DESCRIPTION,
     value: linked?.description ?? '',
-    placeholder: 'What should be pasted into the context box? For example: Paste the contents of your article and they will be tested for bias.',
+    placeholder: COPY.descriptionHint,
     'aria-label': 'Description',
   });
   const note = h('p', { id: 'save-note', class: 'hint', role: 'status' });
@@ -109,10 +123,10 @@ export function openSaveSet() {
 
   body.replaceChildren(
     ...[
-      h('p', { class: 'hint' }, `Saves the questions on this page (${plural(count, 'question')}) as a question set. Each set becomes a page in the side menu, with a context box for whatever you paste.`),
+      h('p', { class: 'hint' }, COPY.lede),
       problems.length > 0 && h('div', { class: 'error', role: 'alert' }, h('strong', {}, 'These questions cannot be saved yet:'), h('ul', {}, problems.map((p) => h('li', {}, p)))),
       h('label', { class: 'field' }, h('span', { class: 'field-label' }, 'Title'), nameInput),
-      h('label', { class: 'field' }, h('span', { class: 'field-label' }, 'Description (optional): shown on the set\'s page, above the context box'), descriptionInput),
+      h('label', { class: 'field' }, h('span', { class: 'field-label' }, COPY.descriptionLabel), descriptionInput),
       note,
       h('div', { class: 'dialog-actions' }, confirmBtn, h('button', { type: 'button', class: 'btn btn-ghost btn-sm', onclick: () => dialog.close() }, 'Cancel')),
     ].filter(Boolean),

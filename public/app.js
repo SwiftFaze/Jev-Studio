@@ -5,6 +5,7 @@ import { app, hasQuestionWork, isSetMode, isSteamSavedMode, isWikipediaSavedMode
 import { initBuilder, renderBuilder, setBuilderPage } from './ui/builder.js';
 import { createWorkspace } from './ui/workspace.js';
 import { createSetPage } from './ui/setpage.js';
+import { createSetViewPage } from './ui/setview.js';
 import { initBulk } from './ui/bulk.js';
 import { initSteam } from './ui/steam.js';
 import { initWikipedia } from './ui/wikipedia.js';
@@ -19,20 +20,37 @@ import { initSaveSet, flash } from './ui/save-set.js';
 import { describeKeySource, initApiKey, migrateLegacyKey, openApiKey } from './ui/apikey.js';
 import { fetchStatus } from './ui/api.js';
 import { formatTokens } from './lib/usage.js';
-import { editPageOf } from './lib/library.js';
+import { EDIT_PAGE_LABEL, editPageOf, isViewOnly } from './lib/library.js';
 
 const $ = (selector) => document.querySelector(selector);
 const workspaces = {}; // one per question page: custom, yesno, score, choice
 const bulk = {};
-let setPage = null; // the page that serves every saved question set
+let setPage = null; // the page that serves every saved question set that can be run here
+let setViewPage = null; // the page that serves every saved set that is only shown (the ones saved from Batch)
 let steamSavedPage = null; // the page that serves every saved Steam analysis
 let wikipediaSavedPage = null; // the page that serves every saved Wikipedia answer
 let newQueryFor = {}; // which containers a mode uses -> its "New query" action
 let measureBars = null;
 
-/** Every saved set shares one set of containers (`mode-set`, `pane-set`, `runbar-set`); so does every saved Steam analysis, and every saved Wikipedia answer. */
-const keyOf = (mode) => (isSetMode(mode) ? 'set' : isSteamSavedMode(mode) ? 'steamsaved' : isWikipediaSavedMode(mode) ? 'wikipediasaved' : mode);
-const CONTAINER_KEYS = [...MODES, 'set', 'steamsaved', 'wikipediasaved'];
+const setOf = (mode) => app.sets.find((s) => s.id === setIdOf(mode)) ?? null;
+
+/**
+ * Every saved set shares one set of containers; so does every saved Steam analysis, and every saved Wikipedia answer.
+ * Sets come in two kinds, on two pages: one saved from Batch is only shown (`setview`, no pane — there is nothing to
+ * run on it), every other one gets the page that runs it (`set`). A set that has been deleted takes the second, which
+ * is where "This question set no longer exists" is said.
+ */
+const keyOf = (mode) =>
+  isSetMode(mode)
+    ? isViewOnly(setOf(mode))
+      ? 'setview'
+      : 'set'
+    : isSteamSavedMode(mode)
+      ? 'steamsaved'
+      : isWikipediaSavedMode(mode)
+        ? 'wikipediasaved'
+        : mode;
+const CONTAINER_KEYS = [...MODES, 'set', 'setview', 'steamsaved', 'wikipediasaved'];
 
 /**
  * The header and the bottom bar are pinned, so tell the CSS how tall they are: scroll targets and keyboard focus
@@ -57,13 +75,6 @@ function trackBars() {
 /* ---------- pages ---------- */
 
 function setMode(mode) {
-  // A set saved from Batch runs each pasted line as its own item, against the same questions — setpage.js can only
-  // send the whole pasted text as one request, so it can never do that. Opening one loads it on Batch instead
-  // (the same as "Edit in Batch"), which is the only page that actually runs one row at a time.
-  if (isSetMode(mode)) {
-    const set = app.sets.find((s) => s.id === setIdOf(mode));
-    if (set && editPageOf(set) === 'batch') return editSet(set.id);
-  }
   const known = isSetMode(mode)
     ? app.sets.some((s) => s.id === setIdOf(mode))
     : isSteamSavedMode(mode)
@@ -78,25 +89,30 @@ function setMode(mode) {
   const key = keyOf(mode);
   const isPage = PAGES.includes(mode);
   const isSet = key === 'set';
+  const isSetView = key === 'setview';
   const isSteamSaved = key === 'steamsaved';
   const isWikipediaSaved = key === 'wikipediasaved';
 
   for (const k of CONTAINER_KEYS) {
     $(`#mode-${k}`).hidden = k !== key;
-    $(`#pane-${k}`).hidden = k !== key;
+    // A read-only set has no results column of its own, so not every container has a pane or a runbar.
+    const pane = $(`#pane-${k}`);
+    if (pane) pane.hidden = k !== key;
     const runbar = $(`#runbar-${k}`);
     if (runbar) runbar.hidden = k !== key;
   }
   // The question builder serves the four question pages and Batch, each with its own questions. A saved set's
-  // questions are deliberately not shown.
+  // questions are never editable here: the page that runs one does not show them, and a set saved from Batch shows
+  // them as text (see setview.js), which is not the builder.
   $('#builder-panel').hidden = !isPage && mode !== 'batch';
   if (isPage || mode === 'batch') setBuilderPage(mode);
   if (isSet) setPage.open(setIdOf(mode));
+  if (isSetView) setViewPage.open(setIdOf(mode));
   if (isSteamSaved) steamSavedPage.open(steamSavedIdOf(mode));
   if (isWikipediaSaved) wikipediaSavedPage.open(wikipediaSavedIdOf(mode));
 
   // How the page is laid out and in what order (see the CSS): questions / input / answers, input / questions / results, ...
-  const kind = isPage ? 'page' : isSet ? 'set' : mode === 'compare' || isSteamSaved || isWikipediaSaved ? 'compare' : 'bulk';
+  const kind = isPage ? 'page' : isSet ? 'set' : isSetView ? 'setview' : mode === 'compare' || isSteamSaved || isWikipediaSaved ? 'compare' : 'bulk';
   $('#layout').dataset.kind = kind;
 
   // Controls that do not apply are made invisible rather than removed, so nothing else on screen moves.
@@ -122,7 +138,10 @@ function loadPageDraft(page, next) {
 
 /** A run goes back to the page it was made on. Runs saved before the question pages existed belong to Single. */
 function restoreRun(entry) {
-  if (entry.page === 'set' && app.sets.some((s) => s.id === entry.setId)) {
+  // A run made on a set's own page goes back there — but a set saved from Batch since has a read-only page now, with
+  // nowhere to put a run. Those take the path below instead, onto Single: the same one request, on the page that makes it.
+  const ranOnSet = entry.page === 'set' && !isViewOnly(setOf(`set:${entry.setId}`));
+  if (ranOnSet && app.sets.some((s) => s.id === entry.setId)) {
     app.setInputs[entry.setId] = stateToText(entry.request.state);
     save.setInputs();
     setMode(`set:${entry.setId}`);
@@ -154,13 +173,19 @@ function onSetsChanged() {
   if (isSetMode(app.mode) && !app.sets.some((s) => s.id === setIdOf(app.mode))) setMode('custom');
 }
 
-/** Put a set's questions on the page it is edited on (Batch for sets saved there, else Single). Keeps that page's input. */
+/**
+ * Put a set's questions on the page it is edited on (Batch for sets saved there, else Single). Keeps that page's
+ * input. That page's own questions are replaced, so it asks first when there are any to lose — every way in goes
+ * through here, so none of them can skip that. False when the set is gone or the answer was no.
+ */
 function editSet(id) {
   const set = app.sets.find((s) => s.id === id);
-  if (!set) return;
+  if (!set) return false;
   const page = editPageOf(set);
+  if (hasQuestionWork(app.drafts[page]) && !confirm(`Replace the questions on the ${EDIT_PAGE_LABEL[page]} page with "${set.name}"?`)) return false;
   loadPageDraft(page, { stateText: app.drafts[page].stateText, questions: questionsFromApi(set.questions), setId: id });
   setMode(page);
+  return true;
 }
 
 /* ---------- examples ---------- */
@@ -281,6 +306,7 @@ const openComparison = (previous, latest) => {
 };
 for (const page of PAGES) workspaces[page] = createWorkspace(page, { onCompare: openComparison });
 setPage = createSetPage({ onCompare: openComparison });
+setViewPage = createSetViewPage({ onOpenInBatch: editSet });
 steamSavedPage = createSteamSavedPage({ onContinue: continueSteam, onDeleted: () => setMode('steam') });
 renderSteamSavedMenu();
 document.querySelector('#steam-toggle').addEventListener('click', toggleSteamSavedMenu);
