@@ -83,7 +83,9 @@ export function renderBatchResults(root, run, hooks) {
   }
 
   function exportCsv() {
-    downloadText(`jev-${run.kind}-${fileStamp()}.csv`, `﻿${toCsv(batchCsvRows(run))}`, 'text/csv');
+    // `label` names the file after the set that was run, when the run came from one; otherwise the page it came from.
+    const name = String(run.label ?? run.kind).replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase() || run.kind;
+    downloadText(`jev-${name}-${fileStamp()}.csv`, `﻿${toCsv(batchCsvRows(run))}`, 'text/csv');
   }
 
   /* ---------- overview ---------- */

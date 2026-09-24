@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { validateRequest } from '../src/validate.js';
 import {
-  articleParts, articleUrl, buildAnswerRequest, buildArticleRequest, buildCheckRequest, buildPartRequest, buildRefineRequest, buildTermRequest, rowPieces, decodeEntities, MAX_CHOICES,
+  articleParts, articleUrl, buildAnswerRequest, buildArticleRequest, buildCheckRequest, buildPartRequest, buildRefineRequest, buildTermRequest, rowPieces, decodeEntities, leadExcerpt, ABOUT_CHARS, MAX_CHOICES,
   addSavedAnswer, cleanSavedAnswers, cleanStats, cleanTrail, mergeResults, mergeTables, parseTables, meaningOptions, parseInfobox, partCandidates, readAnswerChunks, readChoice, readMeaning, readYesNo, savedAnswer, searchTerms, splitSections, splitSentences, stripSnippet,
 } from '../public/lib/wikipedia.js';
 
@@ -107,6 +107,19 @@ test('splitSentences reads each line on its own, and skips empty lines', () => {
   assert.deepEqual(splitSentences('First line\n\nSecond line. Third.\n   \nFourth'), ['First line', 'Second line.', 'Third.', 'Fourth']);
   assert.deepEqual(splitSentences(''), []);
   assert.deepEqual(splitSentences(undefined), []);
+});
+
+test('splitSentences joins a stray mid-sentence newline (where a citation reference used to be) back into one sentence', () => {
+  // Confirmed live against Wikipedia's real extract for one article: "...confidence\nscores. Its output..." — a bare
+  // newline was left where a footnote reference had been, splitting "confidence scores." into two ungrammatical
+  // fragments ("confidence" and "scores.") that then became a truncated final answer.
+  assert.deepEqual(
+    splitSentences('It returns probability estimates and confidence\nscores. Its output is read by a\nperson. \nA new paragraph starts here.'),
+    ['It returns probability estimates and confidence scores.', 'Its output is read by a person.', 'A new paragraph starts here.'],
+  );
+  // A line ending in punctuation, or one followed by an uppercase start, is a real break — not joined.
+  assert.deepEqual(splitSentences('Ends here.\nStarts here'), ['Ends here.', 'Starts here']);
+  assert.deepEqual(splitSentences('No stop\nStarts uppercase.'), ['No stop', 'Starts uppercase.']);
 });
 
 test('splitSentences on the Paris lead keeps the sentence with the area whole', () => {
@@ -221,6 +234,14 @@ test('the part request lists the infobox with its row labels, then the sections,
   assert.deepEqual(request.state, { question: 'How big is Paris?', article: 'Paris' });
 });
 
+test('given step 0\'s meaning, the part request folds it into the instructions and does not ask it again', () => {
+  const parts = articleParts(parisArticle());
+  const request = buildPartRequest('How big is Paris?', 'Paris', parts, 'Its land area');
+  OK(request, 'part with meaning');
+  assert.equal(request.questions.part.instructions, 'Which part of the article `article` is most likely to state the answer to `question`, which is asking for its land area?');
+  assert.equal('meaning' in request.questions, false, 'not asked again: step 0 already answered it, once, for every article');
+});
+
 test('an article with no infobox has no Infobox part, and a very long article is cut to what a Choice allows', () => {
   const noBox = articleParts({ title: 'X', infobox: [], sections: [{ path: 'Lead', anchor: '', sentences: ['One.'] }] });
   assert.deepEqual(noBox.map((p) => p.label), ['Lead']);
@@ -260,6 +281,20 @@ test('the answer request keeps to 250 options a Choice, in chunks, each with its
   assert.equal(enormous.chunks.length, 4, 'a part is cut off after four chunks');
 });
 
+test('the answer request writes the question, article and part into the instructions itself, not as `backtick` placeholders (confirmed live to rank far more decisively); `state` still carries them, for the trail and "Open in Single"', () => {
+  const candidates = [{ text: 'Sentence.', before: '', after: '' }];
+  const plain = buildAnswerRequest('How big is Paris?', 'Paris', 'History', candidates);
+  assert.equal(plain.request.questions.answer0.instructions, 'Which of these sentences, from the part "History" of the article "Paris", states the answer to "How big is Paris?"?');
+  assert.deepEqual(plain.request.state, { question: 'How big is Paris?', article: 'Paris', part: 'History' });
+
+  const withMeaning = buildAnswerRequest('How big is Paris?', 'Paris', 'History', candidates, 'An explanation or a description');
+  OK(withMeaning.request, 'answer request with meaning');
+  assert.equal(
+    withMeaning.request.questions.answer0.instructions,
+    'Which of these sentences, from the part "History" of the article "Paris", is an explanation or a description for "How big is Paris?"?',
+  );
+});
+
 test('readAnswerChunks puts every candidate in one list, best first, each with its chunk\'s none', () => {
   const chunks = [[{ text: 'a' }, { text: 'b' }], [{ text: 'c' }]];
   const answers = {
@@ -276,6 +311,29 @@ test('the check request carries the sentence and its neighbours, and leaves out 
   assert.deepEqual(both.state, { question: 'q', article: 'Paris', part: 'Lead', sentence: 'S', before: 'B', after: 'A' });
   const bare = buildCheckRequest('q', 'Paris', 'Infobox', { text: 'S', before: '', after: '' });
   assert.deepEqual(Object.keys(bare.state), ['question', 'article', 'part', 'sentence']);
+});
+
+test('leadExcerpt joins sentences up to ABOUT_CHARS, and is null for nothing to join', () => {
+  assert.equal(leadExcerpt(undefined), null);
+  assert.equal(leadExcerpt([]), null);
+  assert.equal(leadExcerpt(['One.', 'Two.']), 'One. Two.');
+  const long = leadExcerpt(Array.from({ length: 100 }, () => 'A sentence of a certain length.'));
+  assert.equal(long.length, ABOUT_CHARS);
+  assert.ok(long.endsWith('…'));
+});
+
+test('an infobox or table row, with no before/after of its own, gets the Lead as `about` instead; the Lead itself does not repeat itself', () => {
+  const about = 'Paris is the capital of France.';
+  const withAbout = buildAnswerRequest('q', 'Paris', 'Infobox', [{ text: 'Area: 105 km2' }], null, about);
+  assert.equal(withAbout.request.state.about, about);
+  assert.match(withAbout.request.questions.answer0.instructions, /`about` is a short excerpt/);
+  const withoutAbout = buildAnswerRequest('q', 'Paris', 'Lead', [{ text: 'Paris is a city.' }]);
+  assert.equal('about' in withoutAbout.request.state, false);
+  assert.doesNotMatch(withoutAbout.request.questions.answer0.instructions, /about/);
+
+  const check = buildCheckRequest('q', 'Paris', 'Infobox', { text: 'Area: 105 km2', before: '', after: '' }, about);
+  assert.equal(check.state.about, about);
+  assert.match(check.questions.answers.instructions, /`about` is a short excerpt/);
 });
 
 /* ---------- reading answers ---------- */
@@ -548,9 +606,13 @@ test('the refine request offers the pieces of the row, with a way out, and maps 
   assert.equal(readChoice({ probabilities: { r0: 0.1, r1: 0.85, none: 0.05 } }, pieces, 'r').ranked[0].item, 'Top speed: 187 km/h');
 });
 
-test('the final check asks that every detail of the question matches', () => {
-  const check = buildCheckRequest('q', 'Paris', 'Infobox', { text: 'S', before: '', after: '' });
-  assert.match(check.questions.answers.instructions, /exactly what the question specifies/);
+test('the final check says where the candidate came from, and asks whether it is what the question asks for', () => {
+  const check = buildCheckRequest('how big is Paris?', 'Paris', 'Infobox', { text: 'S', before: '', after: '' });
+  // The part and article, so a row that names no subject of its own is read as being about the article's subject.
+  assert.match(check.questions.answers.instructions, /from the part "Infobox" of the article "Paris"/);
+  // The question written out, not left as `question`, and asked as "is this the thing it asks for".
+  assert.match(check.questions.answers.instructions, /is `sentence` the thing "how big is Paris\?" asks for/);
+  assert.match(check.questions.answers.instructions, /a different fact about the same subject, or a fact about something else/);
 });
 
 test('a saved answer keeps the refined piece, and the refine step is a known kind of step', () => {

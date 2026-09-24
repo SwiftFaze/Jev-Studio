@@ -15,11 +15,27 @@ import { openSaveSet } from './save-set.js';
 const CONFIRM_ABOVE = 20; // ask before spending this many live API calls at once
 const MAX_FILE_BYTES = 2_000_000;
 
-/** Batch mode (many items, your questions) and Rank mode (many candidates, fixed relevance questions) share this controller. */
-export function initBulk(kind, { openCsv } = {}) {
+/**
+ * Batch mode (many items, your questions), Rank mode (many candidates, fixed relevance questions) and a Batch-saved
+ * set's page (many items, the set's questions) share this controller: one item per request, a table that fills in as
+ * they finish. What differs between them is passed in, so there is one runner rather than three.
+ *
+ * `kind` names the containers (`#mode-<kind>`, `#runbar-<kind>`, `#<kind>-results`, …) and is what a run records as
+ * its own kind. Options:
+ *  - `slice()` the state this page reads and writes — a function, because a set's page is re-pointed at another set;
+ *  - `persist()` how that state is saved;
+ *  - `questions()` the questions to run, throwing an Error with a message fit to show, or null when there are none;
+ *  - `questionIds()` their ids, for matching a CSV's expected_<id> columns;
+ *  - `panelHead` what goes in the input panel's head, in place of the plain heading (a set puts its name there);
+ *  - `hideEmptyResults` hide the whole results panel until there is a run, rather than explain what will appear;
+ *  - `onReset()` anything else "New query" clears, and `resetAsks()` what else it would throw away.
+ */
+export function initBulk(kind, { openCsv, slice: sliceOf, persist, questions: questionsOf, questionIds, label, panelHead, hideEmptyResults, onReset, resetAsks, hint, placeholder, saveButton, extraButtons } = {}) {
   const rank = kind === 'rank';
-  const slice = app[kind];
+  const slice = () => (sliceOf ? sliceOf() : app[kind]);
+  const persistNow = () => (persist ? persist() : save[kind]());
   const $ = (suffix) => document.querySelector(`#${kind}-${suffix}`);
+  const pane = () => document.querySelector(`#pane-${kind}`);
 
   let handle = null;
   let running = false;
@@ -29,7 +45,7 @@ export function initBulk(kind, { openCsv } = {}) {
 
   const persistSoon = () => {
     clearTimeout(saveTimer);
-    saveTimer = setTimeout(() => save[kind](), 400);
+    saveTimer = setTimeout(() => persistNow(), 400);
   };
   // Row updates arrive in bursts; redraw the table at most ~5 times a second.
   const scheduleRefresh = () => {
@@ -48,11 +64,13 @@ export function initBulk(kind, { openCsv } = {}) {
 
   /* ---------- input panel ---------- */
   const noun = rank ? 'candidates' : 'items';
+  // A set's page says what to paste in its own description, above the box, so it passes '' and gets no line here.
+  const hintLine = hint ?? 'One item per line. Each is judged on its own against the questions below, one request per item.';
   const countEl = h('span', { class: 'muted small' });
 
   function currentItems() {
-    const parsed = parseItems(slice.text);
-    return { ...parsed, items: applyExpected(parsed.items, slice.imported) };
+    const parsed = parseItems(slice().text);
+    return { ...parsed, items: applyExpected(parsed.items, slice().imported) };
   }
 
   function renderCount() {
@@ -72,10 +90,10 @@ export function initBulk(kind, { openCsv } = {}) {
     class: 'text',
     rows: 10,
     'aria-label': rank ? 'Candidates, one per line' : 'Items, one per line',
-    placeholder: rank ? 'One candidate per line, such as document titles, answers, or product names.' : 'One item per line. Every item is judged against the same questions below.',
-    value: slice.text,
+    placeholder: placeholder ?? (rank ? 'One candidate per line, such as document titles, answers, or product names.' : 'One item per line. Every item is judged against the same questions below.'),
+    value: slice().text,
     oninput: (e) => {
-      slice.text = e.target.value;
+      slice().text = e.target.value;
       persistSoon();
       renderCount();
     },
@@ -88,9 +106,9 @@ export function initBulk(kind, { openCsv } = {}) {
         rows: 2,
         'aria-label': 'What you are looking for',
         placeholder: 'What are you looking for? For example: how do I get a refund?',
-        value: slice.query,
+        value: slice().query,
         oninput: (e) => {
-          slice.query = e.target.value;
+          slice().query = e.target.value;
           persistSoon();
         },
       })
@@ -100,7 +118,7 @@ export function initBulk(kind, { openCsv } = {}) {
     ? null
     : h('input', {
         type: 'file',
-        id: 'batch-file',
+        id: `${kind}-file`,
         accept: '.csv,.tsv,.txt,text/csv,text/plain',
         hidden: true,
         onchange: async (e) => {
@@ -111,22 +129,23 @@ export function initBulk(kind, { openCsv } = {}) {
           const text = await file.text();
           if (/\.(csv|tsv)$/i.test(file.name)) {
             openCsv(file.name, parseCsv(text), {
-              questionIds: app.drafts.batch.questions.map((q) => q.id.trim()).filter(Boolean),
+              // Which expected_<id> columns to look for: the questions this page will run, whoever owns them.
+              questionIds: questionIds ? questionIds() : app.drafts.batch.questions.map((q) => q.id.trim()).filter(Boolean),
               onImport: ({ items, truncated, total }) => {
-                slice.text = items.map((i) => i.text).join('\n');
-                slice.imported = items;
-                itemsBox.value = slice.text;
+                slice().text = items.map((i) => i.text).join('\n');
+                slice().imported = items;
+                itemsBox.value = slice().text;
                 renderCount();
-                save.batch();
+                persistNow();
                 say(truncated ? `Imported the first ${MAX_ITEMS} of ${total} rows.` : `Imported ${items.length} rows.`);
               },
             });
           } else {
-            slice.text = text;
-            slice.imported = [];
+            slice().text = text;
+            slice().imported = [];
             itemsBox.value = text;
             renderCount();
-            save.batch();
+            persistNow();
             say('');
           }
         },
@@ -138,20 +157,22 @@ export function initBulk(kind, { openCsv } = {}) {
       id: `${kind}-concurrency`,
       'aria-label': 'Requests at a time',
       onchange: (e) => {
-        slice.concurrency = Number(e.target.value);
-        save[kind]();
+        slice().concurrency = Number(e.target.value);
+        persistNow();
       },
     },
     [1, 2, 3, 4, 5, 6].map((n) => h('option', { value: String(n) }, String(n))),
   );
-  concurrency.value = String(slice.concurrency);
+  concurrency.value = String(slice().concurrency);
 
   document.querySelector(`#mode-${kind}`).replaceChildren(
     h(
       'div',
       { class: 'panel' },
-      h('div', { class: 'panel-head' }, h('h2', {}, rank ? '1. What are you looking for?' : '1. What should Jev look at?')),
-      rank ? [queryBox, h('h3', {}, 'Candidates'), h('p', { class: 'hint' }, 'Jev scores how well each candidate answers the query, then they are ranked by a weighted score. Nothing is generated: you get probabilities.')] : h('p', { class: 'hint' }, 'One item per line. Each is judged on its own against the questions below, one request per item.'),
+      h('div', { class: 'panel-head' }, ...(panelHead ?? [h('h2', {}, rank ? '1. What are you looking for?' : '1. What should Jev look at?')])),
+      rank
+        ? [queryBox, h('h3', {}, 'Candidates'), h('p', { class: 'hint' }, 'Jev scores how well each candidate answers the query, then they are ranked by a weighted score. Nothing is generated: you get probabilities.')]
+        : hintLine && h('p', { class: 'hint' }, hintLine),
       itemsBox,
       h(
         'div',
@@ -182,7 +203,7 @@ export function initBulk(kind, { openCsv } = {}) {
   }
 
   async function execute(indices) {
-    const run = slice.run;
+    const run = slice().run;
     controller = new AbortController();
     running = true;
     syncButtons();
@@ -191,7 +212,7 @@ export function initBulk(kind, { openCsv } = {}) {
     const { fatal } = await executeBatch({
       rows: run.rows,
       indices,
-      concurrency: slice.concurrency,
+      concurrency: slice().concurrency,
       signal: controller.signal,
       requestFor: (row) => ({
         state: run.kind === 'rank' ? buildRankState(run.query, row.text) : row.text,
@@ -209,14 +230,15 @@ export function initBulk(kind, { openCsv } = {}) {
     refreshTimer = null;
     syncButtons();
     handle?.refresh();
-    save[kind]();
+    persistNow();
   }
 
   function show() {
-    handle = renderBatchResults($('results'), slice.run, {
+    pane()?.classList.remove('pane-empty');
+    handle = renderBatchResults($('results'), slice().run, {
       onChange: persistSoon,
       onStop: stop,
-      onResume: () => execute(slice.run.rows.flatMap((r, i) => (r.status === 'ok' ? [] : [i]))),
+      onResume: () => execute(slice().run.rows.flatMap((r, i) => (r.status === 'ok' ? [] : [i]))),
       onRetryRow: (i) => !running && execute([i]),
       isRunning: () => running,
     });
@@ -224,6 +246,13 @@ export function initBulk(kind, { openCsv } = {}) {
 
   function emptyResults() {
     handle = null;
+    // A set's page hides the whole Results panel until there is a run, the same as the other set page does with its
+    // Answers panel: the box to paste into fills the height, and nothing sits under it saying there is nothing yet.
+    if (hideEmptyResults) {
+      $('results').replaceChildren();
+      pane()?.classList.add('pane-empty');
+      return;
+    }
     $('results').replaceChildren(
       h('p', { class: 'muted' }, rank ? 'Ranked candidates appear here as they finish.' : 'Results appear here as each item finishes. Nothing is sent until you press Run.'),
       h(
@@ -244,25 +273,26 @@ export function initBulk(kind, { openCsv } = {}) {
     if (running) return;
     const { items } = currentItems();
 
-    if (rank && !slice.query.trim()) return say('Enter what you are looking for first.');
+    if (rank && !slice().query.trim()) return say('Enter what you are looking for first.');
     if (items.length === 0) return say(rank ? 'Add at least one candidate.' : 'Add at least one item.');
 
     let questions;
     try {
-      questions = rank ? rankQuestions() : buildQuestions(app.drafts.batch.questions);
+      questions = questionsOf ? questionsOf() : rank ? rankQuestions() : buildQuestions(app.drafts.batch.questions);
     } catch (err) {
       return say(err.message);
     }
-    if (Object.keys(questions).length === 0) return say('Add at least one question.');
+    if (!questions || Object.keys(questions).length === 0) return say('Add at least one question.');
     if (!app.status.mock && items.length > CONFIRM_ABOVE && !confirm(`This will make ${items.length} API calls with your key. Continue?`)) return;
 
     say('');
-    const previous = slice.run;
-    slice.run = {
+    const previous = slice().run;
+    slice().run = {
       kind,
+      label: label?.() ?? undefined, // what to call the exported CSV, when the page has a better name than its kind
       questions,
       model: DEFAULT_MODEL,
-      query: rank ? slice.query.trim() : undefined,
+      query: rank ? slice().query.trim() : undefined,
       rows: items.map((item, index) => ({ index, text: item.text, expected: item.expected, status: 'pending' })),
       marks: {},
       open: null,
@@ -281,33 +311,35 @@ export function initBulk(kind, { openCsv } = {}) {
     };
     show();
     revealPane($('results'));
-    await execute(slice.run.rows.map((_, i) => i));
+    await execute(slice().run.rows.map((_, i) => i));
   }
 
   /**
-   * New query: start over. Clears the items (or the query and candidates), the results, and, for Batch, Batch's own
-   * questions. Rank's questions are fixed, so there is nothing to clear there.
+   * New query: start over. Clears the items (or the query and candidates) and the results, plus, for Batch, Batch's
+   * own questions. Rank's are fixed and a set's belong to the set, so neither has questions to clear here.
    */
   function reset() {
     if (running) stop();
-    const questionsAtStake = !rank && hasQuestionWork(app.drafts.batch);
-    const resultsAtStake = slice.run?.rows.some((r) => r.status === 'ok');
-    if ((questionsAtStake || resultsAtStake) && !confirm(`Start a new query? This clears the ${rank ? 'query, the candidates' : 'items'}${questionsAtStake ? ', the questions' : ''} and the results. Batch and rank results are not kept in History.`)) return;
-    if (!rank) {
+    // `resetAsks` is what this page loses besides the items and the results; Batch's own questions are the default.
+    const alsoAtStake = resetAsks ? resetAsks() : !rank && hasQuestionWork(app.drafts.batch) ? 'the questions' : '';
+    const resultsAtStake = slice().run?.rows.some((r) => r.status === 'ok');
+    if ((alsoAtStake || resultsAtStake) && !confirm(`Start a new query? This clears the ${rank ? 'query, the candidates' : 'items'}${alsoAtStake ? `, ${alsoAtStake}` : ''} and the results. Batch and rank results are not kept in History.`)) return;
+    if (onReset) onReset();
+    else if (!rank) {
       app.drafts.batch = { stateText: '', questions: blankDraft().questions };
       save.typed();
       renderBuilder();
     }
-    slice.text = '';
-    slice.imported = [];
-    if (rank) slice.query = '';
-    slice.run = null;
+    slice().text = '';
+    slice().imported = [];
+    if (rank) slice().query = '';
+    slice().run = null;
     itemsBox.value = '';
     if (queryBox) queryBox.value = '';
     renderCount();
     emptyResults();
     say('');
-    save[kind]();
+    persistNow();
     (queryBox ?? itemsBox).focus();
   }
 
@@ -316,34 +348,53 @@ export function initBulk(kind, { openCsv } = {}) {
     ...[
       runBtn,
       stopBtn,
-      // Batch runs Single's questions, so it can save them as a set; Rank's questions are fixed.
-      !rank && h('button', { type: 'button', id: 'save-batch', class: 'btn', onclick: openSaveSet, title: 'Save the questions as a question set, or overwrite one' }, 'Save'),
+      // Batch's questions are its own, so it can save them as a set. Rank's are fixed, and a set's are already saved.
+      (saveButton ?? !rank) && h('button', { type: 'button', id: 'save-batch', class: 'btn', onclick: openSaveSet, title: 'Save the questions as a question set, or overwrite one' }, 'Save'),
+      ...(extraButtons ?? []),
       statusEl,
     ].filter(Boolean),
   );
 
-  renderCount();
-  if (slice.run) show();
-  else emptyResults();
+  /**
+   * Write what the debounce is still holding, now. Typing is saved 400ms after it stops, which is fine while you stay
+   * on a page; it is not when the page is about to be pointed at another set's state, so that flushes first.
+   */
+  function flush() {
+    clearTimeout(saveTimer);
+    persistNow();
+  }
+
+  /** Draw the input and the results from whatever the slice holds now — on start, and when a set's page is re-pointed. */
+  function refresh() {
+    itemsBox.value = slice().text;
+    if (queryBox) queryBox.value = slice().query;
+    concurrency.value = String(slice().concurrency);
+    renderCount();
+    say('');
+    if (slice().run) show();
+    else emptyResults();
+  }
+
+  refresh();
   syncButtons();
 
   /** Is there anything here that loading an example would throw away? */
-  const hasWork = () => slice.text.trim() !== '' || (rank && slice.query.trim() !== '') || Boolean(slice.run?.rows.some((r) => r.status === 'ok'));
+  const hasWork = () => slice().text.trim() !== '' || (rank && slice().query.trim() !== '') || Boolean(slice().run?.rows.some((r) => r.status === 'ok'));
 
   /** Replace the input with an example (or blank) and clear the results. */
   function load({ query = '', text = '', imported = [] }) {
     if (running) stop();
-    slice.text = text;
-    slice.imported = imported;
-    if (rank) slice.query = query;
-    slice.run = null;
+    slice().text = text;
+    slice().imported = imported;
+    if (rank) slice().query = query;
+    slice().run = null;
     itemsBox.value = text;
     if (queryBox) queryBox.value = query;
     renderCount();
     emptyResults();
     say('');
-    save[kind]();
+    persistNow();
   }
 
-  return { start, reset, load, hasWork };
+  return { start, reset, load, hasWork, refresh, flush, isRunning: () => running, stop };
 }

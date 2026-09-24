@@ -29,6 +29,7 @@ const KEYS = {
   history: 'jev-studio:history:v1',
   sets: 'jev-studio:sets:v1',
   setInputs: 'jev-studio:setinputs:v1', // the context you last pasted on each set's page
+  setBatch: 'jev-studio:setbatch:v1', // the items, and the last run, on each Batch-saved set's page
   setsMenu: 'jev-studio:setsmenu:v1', // whether the sidebar's Question sets submenu is open
   steamMenu: 'jev-studio:steammenu:v1', // whether the saved analyses under Steam reviews in the sidebar are shown
   batch: 'jev-studio:batch:v1',
@@ -136,6 +137,27 @@ const storedWikipedia = readStore(KEYS.wikipedia, {});
 const storedWikipediaSaved = cleanSavedAnswers(readStore(KEYS.wikipediaSaved, []));
 
 const storedSets = readStore(KEYS.sets, []);
+
+/**
+ * The work on each Batch-saved set's page, by set id: the items pasted there, the rows imported from a CSV (which
+ * carry the expected answers), how many requests at a time, and the last run. A set that has since been deleted is
+ * dropped, so its items and results do not sit in storage for ever.
+ */
+function setBatchSlices(stored) {
+  const out = {};
+  if (!stored || typeof stored !== 'object') return out;
+  for (const set of storedSets) {
+    const slice = stored[set.id];
+    if (!slice || typeof slice !== 'object') continue;
+    out[set.id] = {
+      text: typeof slice.text === 'string' ? slice.text : '',
+      imported: Array.isArray(slice.imported) ? slice.imported : [],
+      concurrency: [1, 2, 3, 4, 5, 6].includes(slice.concurrency) ? slice.concurrency : 3,
+      run: normalizeRun(slice.run),
+    };
+  }
+  return out;
+}
 // A saved mode that is no longer a page (or a set that has since been deleted) falls back to the first page.
 const storedMode = readStore(KEYS.mode, 'custom');
 const modeStillExists =
@@ -163,6 +185,7 @@ export const app = {
   history: readStore(KEYS.history, []),
   sets: storedSets,
   setInputs: readStore(KEYS.setInputs, {}),
+  setBatch: setBatchSlices(readStore(KEYS.setBatch, {})),
   setsMenuOpen: readStore(KEYS.setsMenu, true),
   steamMenuOpen: readStore(KEYS.steamMenu, true),
   batch: { text: '', imported: [], concurrency: 3, ...storedBatch, run: normalizeRun(storedBatch.run) },
@@ -188,6 +211,12 @@ export const save = {
   history: () => writeStore(KEYS.history, app.history),
   sets: () => writeStore(KEYS.sets, app.sets),
   setInputs: () => writeStore(KEYS.setInputs, app.setInputs),
+  // Several sets' results at once are the most this app ever stores; if they do not fit, keep every page's items and
+  // drop only the runs, the same trade `writeWithRun` makes for one page.
+  setBatch: () => {
+    if (writeStore(KEYS.setBatch, app.setBatch)) return true;
+    return writeStore(KEYS.setBatch, Object.fromEntries(Object.entries(app.setBatch).map(([id, slice]) => [id, { ...slice, run: null }])));
+  },
   setsMenu: () => writeStore(KEYS.setsMenu, app.setsMenuOpen),
   steamMenu: () => writeStore(KEYS.steamMenu, app.steamMenuOpen),
   mode: () => writeStore(KEYS.mode, app.mode),
@@ -217,3 +246,9 @@ export const currentDraft = () => app.drafts[currentPage()];
 export const lockedType = () => PAGE_TYPE[app.mode] ?? null;
 
 export const hasQuestionWork = (draft = currentDraft()) => draft.questions.some((q) => q.instructions.trim() !== '');
+
+/** The work on one Batch-saved set's page, started empty the first time that set is opened. */
+export function setBatchSlice(setId) {
+  if (!app.setBatch[setId]) app.setBatch[setId] = { text: '', imported: [], concurrency: 3, run: null };
+  return app.setBatch[setId];
+}

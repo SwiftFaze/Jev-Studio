@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { lintQuestion } from '../public/lib/lint.js';
 import { compareRuns } from '../public/lib/compare.js';
-import { EDIT_PAGE_LABEL, editPageOf, exportSet, parseSetFile, removeSet, SET_FORMAT, upsertSet } from '../public/lib/library.js';
+import { EDIT_PAGE_LABEL, editPageOf, exportSet, isBatchSet, parseSetFile, removeSet, SET_FORMAT, upsertSet } from '../public/lib/library.js';
 import { batchCsvRows, resultsToText } from '../public/lib/export.js';
 import { buildRankState, rankQuestions, rankSpecs } from '../public/lib/rank.js';
 import { addUsage, emptyUsage, formatTokens } from '../public/lib/usage.js';
@@ -175,6 +175,14 @@ test('a set saved from Batch is edited in Batch; every other set, and imported o
   assert.equal(editPageOf(again[0]), 'custom');
   // and the exported file carries no origin: imported sets belong to Single
   assert.equal('origin' in exportSet('Tickets', goodQuestions(), ''), false);
+});
+
+test('a set saved from Batch is the one that runs its questions over many items; every other set runs them over one context', () => {
+  const fromBatch = upsertSet([], 'Tickets', goodQuestions(), { origin: 'batch', now: 1000 })[0];
+  assert.equal(isBatchSet(fromBatch), true);
+  for (const other of [upsertSet([], 'Other', goodQuestions(), { now: 1000 })[0], undefined, null]) {
+    assert.equal(isBatchSet(other), false, String(other?.name));
+  }
 });
 
 /* ---------- export ---------- */

@@ -1,6 +1,8 @@
 import {
-  articleParts, articleUrl, buildAnswerRequest, buildArticleRequest, buildCheckRequest, buildPartRequest, buildRefineRequest, buildTermRequest, mergeResults, meaningOptions, partCandidates,
-  MAX_CHOICES, readAnswerChunks, readChoice, readMeaning, readYesNo, searchTerms,
+  articleParts, articleUrl, attributeQuestion, buildAnswerRequest, buildArticleRequest, buildCheckRequest, buildClassifyRequest, buildCompareRequest, buildFilterRequest, buildPartRequest,
+  buildRefineRequest, buildTermRequest, leadExcerpt, mergeResults, meaningOptions, parseComparison, parseNegation, partCandidates, QUESTION_TYPE_LABELS, readAnswerChunks, readChoice, readClassify,
+  readFilter, readMeaning, readYesNo, resolvePronoun, searchTerms, splitMultiPart,
+  MAX_CHOICES,
 } from './wikipedia.js';
 
 // How far the search goes before it gives up. Each Jev request costs tokens; the best case is five. Every limit can be
@@ -18,17 +20,21 @@ export const THRESHOLDS = {
   snippet: 0.8, // a search snippet is shown at once as a quick answer when Jev is at least this sure it states the answer
   sureTerm: 0.6, // under this, the search term Jev ranked second is searched as well
   tryAt: 0.05, // after the first, an article, part or search term is only tried if Jev gave it at least this much: below that, it is a guess that costs requests
+  falsePremise: 0.7, // step 0's "does this rest on a false assumption?" gate must be at least this sure before retrieval is skipped
+  unanswerable: 0.7, // step 0's "is this coherent?" gate (read as "is this NOT coherent") must be at least this sure before retrieval is skipped
+  route: 0.3, // the classified question type must be at least this likely before Multi-Part/Comparison/Negation get their own handling, rather than the single-entity pipeline
+  negation: 0.3, // a Negation candidate is kept only when Jev is this unsure or less that the positive condition holds for it
 };
 export const SEARCH_LIMIT = 8; // results per search
 
 /* ---------- the settings a person can change ---------- */
 
 /** What the page starts with. A limit of `null` is "no limit"; the two percentages are whole numbers. */
-export const DEFAULT_SETTINGS = { requests: LIMITS.requests, articles: LIMITS.articles, parts: LIMITS.parts, terms: LIMITS.terms, candidates: LIMITS.candidates, accept: 60, skipUnder: 5, quick: true, refine: true };
+export const DEFAULT_SETTINGS = { requests: LIMITS.requests, articles: LIMITS.articles, parts: LIMITS.parts, terms: LIMITS.terms, candidates: LIMITS.candidates, accept: 60, skipUnder: 5, quick: true, refine: true, classify: true };
 /** The lowest and highest a setting can be. */
 export const SETTING_RANGES = { requests: [1, 500], articles: [1, 50], parts: [1, 50], terms: [1, 10], candidates: [1, 50], accept: [10, 100], skipUnder: [0, 50] };
 const LIMIT_SETTINGS = ['requests', 'articles', 'parts', 'terms', 'candidates'];
-const SWITCH_SETTINGS = ['quick', 'refine'];
+const SWITCH_SETTINGS = ['quick', 'refine', 'classify'];
 
 /** Stored settings, checked: anything missing or out of range goes back to its default, and a limit can be `null` for none. */
 export function cleanSettings(stored) {
@@ -52,6 +58,7 @@ export function runOptions(settings) {
     thresholds: { found: s.accept / 100, tryAt: s.skipUnder / 100 },
     quick: s.quick,
     refine: s.refine,
+    classify: s.classify,
   };
 }
 
@@ -90,12 +97,32 @@ const choiceOptions = (ranked, describe, none) => {
 };
 const confidenceOf = (answer) => (Number.isFinite(answer?.confidence) ? answer.confidence : null);
 
+/** A short name for a candidate row or sentence, for the negation filter's per-candidate question ("Helium: 2" → "Helium"). */
+const candidateName = (text) => {
+  const head = String(text).split(/[:•]/)[0].trim();
+  const words = head.split(/\s+/).slice(0, 6).join(' ');
+  return (words || text).slice(0, 60).trim();
+};
+
+/** The Lead excerpt for `part`, unless `part` is the Lead itself (then there is nothing to add: the candidate already is it). */
+const aboutFor = (data, part) => (part.label === 'Lead' ? null : leadExcerpt(data.sections?.find((s) => s.path === 'Lead')?.sentences));
+
 /**
  * Find a quote on Wikipedia that answers `question`, step by step, and say how sure Jev was at each one.
  *
  * Jev never writes the answer: at every step code builds a list of candidates and Jev picks one, so the answer is text
- * that is really on the page. The steps are (1) which search term, (2) which article, (3) which part of it, (4) which
- * sentence, and (5) a Yes / No on that sentence, which must be for exactly what the question specifies. When it fails, the steps go
+ * that is really on the page. Unless `classify: false`, it starts with (0) a Choice of what kind of question this is,
+ * plus a Yes / No gate for a false premise and one for being unanswerable — either gate closing skips retrieval
+ * entirely (`status: 'false-premise'` or `'unanswerable'`). Multi-Part and Comparison questions are then routed to
+ * their own handling: split into sub-questions (in code — Jev only chooses between options, it cannot write the split
+ * itself), each answered by running this same pipeline again, and combined (Comparison lets Jev decide from the two
+ * facts found, rather than code parsing numbers out of them). Negation enumerates a candidate set from a "List of …"
+ * article and asks one batched Yes / No per candidate, keeping the one Jev is confident does *not* satisfy the
+ * condition. Any of these three fall back to the single-entity pipeline below when the question doesn't match a
+ * recognised pattern, rather than guessing.
+ *
+ * The single-entity pipeline is (1) which search term, (2) which article, (3) which part of it, (4) which sentence,
+ * and (5) a Yes / No on that sentence, which must be the thing the question asks for, not another fact about the same subject. When it fails, the steps go
  * back without asking Jev again where they can: the next best sentence or row of the same part, then the next part, then the next article.
  * (6) When the answer is a row (of a table, or of the infobox), it is cut into its pieces and Jev picks the one piece that is the answer. When the articles of a search are used up, a different
  * path is tried: the next search term, with its own results. It stops when the answer is found, or a limit is reached.
@@ -105,28 +132,33 @@ const confidenceOf = (answer) => (Number.isFinite(answer?.confidence) ? answer.c
  *  - `article(title)` resolves with `{ title, disambiguation, infobox, sections }` (an error with `status: 404` skips the article);
  *  - `run(request, signal)` sends a request to Jev and resolves with `{ answers, usage }`.
  * Options: `limits` and `thresholds` change `LIMITS` and `THRESHOLDS` (`Infinity` for no limit); `quick: false` leaves out
- * the quick answer from search snippets, and its questions; `refine: false` leaves out step 6; `avoid: { articles, terms }` skips articles and search terms
+ * the quick answer from search snippets, and its questions; `refine: false` leaves out step 6; `classify: false` leaves out step 0 and its
+ * routing, going straight to the single-entity pipeline; `avoid: { articles, terms }` skips articles and search terms
  * that an earlier run already used, which is how a different path is tried on purpose. `onProgress` is called with a
  * snapshot after every change, so a page can draw the trail as it grows. Aborting `signal` stops it as soon as the
  * request in flight comes back. It resolves with the last snapshot:
- *  - `status`: 'found', 'not-found' or 'stopped', and `reason` for a not-found;
+ *  - `status`: 'found', 'not-found', 'stopped', 'false-premise' or 'unanswerable', and `reason` for anything but 'found'/'stopped';
  *  - `answer`: `{ text, refined, title, part, url, p, checked, before, after }`, or null (`refined` is the one piece of a row that is the answer, or ''); `best` is the closest one seen when there is none;
+ *    a Multi-Part answer also has `parts` (each sub-answer); a Comparison answer also has `compared` (both entities' sub-answers);
  *  - `quick`: a snippet Jev was sure answers the question, shown before the check, or null;
  *  - `trail`: one entry per step taken: `{ id, title, label, p, note, skipped, reused, others, none, meaning }`, and for a step
  *    Jev was asked, what it was asked (`instructions`, `state`) and what it thought (`chosen`, `options`, `confidence`);
- *  - `requests`, `tokens`, `ms`: what the run has cost so far; `searched` and `read`: the search terms used and articles opened.
+ *    a `subquestion` step also has `sub`, that sub-question's own trail;
+ *  - `requests`, `tokens`, `ms`: what the run has cost so far; `searched` and `read`: the search terms used and articles opened;
+ *  - `log`: every request sent to Jev and the response it gave, `{ request, response }`, in order, including a sub-question's own
+ *    (Multi-Part and Comparison fold their sub-runs' logs into this one) — the whole run's actual traffic, for exporting or debugging.
  * A failure from `search`, `article` or `run` is thrown, with the snapshot so far on `err.progress`.
  */
-export async function findAnswer(question, { search, article, run, signal, onProgress = () => {}, limits = {}, thresholds = {}, quick = true, refine = true, avoid = {} } = {}) {
+export async function findAnswer(question, { search, article, run, signal, onProgress = () => {}, limits = {}, thresholds = {}, quick = true, refine = true, classify = true, avoid = {} } = {}) {
   const max = { ...LIMITS };
   for (const key of Object.keys(limits)) if (limits[key] !== undefined) max[key] = limits[key] ?? Infinity;
   const at = { ...THRESHOLDS, ...thresholds };
   const started = performance.now();
-  const state = { status: 'running', reason: '', requests: 0, tokens: 0, ms: 0, trail: [], quick: null, best: null, answer: null, searched: [], read: [] };
+  const state = { status: 'running', reason: '', requests: 0, tokens: 0, ms: 0, trail: [], quick: null, best: null, answer: null, searched: [], read: [], log: [] };
   const tried = new Set((avoid.articles ?? []).map(lower)); // articles already opened, on this run or an earlier one
   // Why it may have stopped short, for a "Not found": options left out for being under the floor, or for a limit.
   const left = { floor: false, limit: false };
-  const snapshot = () => ({ ...state, ms: Math.round(performance.now() - started), trail: state.trail.map((entry) => ({ ...entry })), searched: [...state.searched], read: [...state.read] });
+  const snapshot = () => ({ ...state, ms: Math.round(performance.now() - started), trail: state.trail.map((entry) => ({ ...entry })), searched: [...state.searched], read: [...state.read], log: [...state.log] });
   const emit = () => onProgress(snapshot());
   const add = (entry) => {
     state.trail.push(entry);
@@ -144,11 +176,17 @@ export async function findAnswer(question, { search, article, run, signal, onPro
     const reply = await run(request, signal);
     guard();
     state.tokens += (reply?.usage?.input_tokens ?? 0) + (reply?.usage?.output_tokens ?? 0);
+    state.log.push({ request, response: reply }); // the exact pair sent and received, for exporting the whole run
     return reply?.answers ?? {};
   };
 
-  /** Steps 3 to 5 on one article: the parts in order, each tried until an answer passes the check. */
-  async function readArticle(data, entry) {
+  /**
+   * Steps 3 to 5 on one article: the parts in order, each tried until an answer passes the check. `meaning` is step
+   * 0's own answer to "what is `question` asking for?" (its description), when it already ran; that lets step 3
+   * (which part) use it too, not just step 4. When it hasn't (`classify: false`), it is asked here instead, bundled
+   * with which part — which means it can only inform step 4, since by the time it comes back the part is already chosen.
+   */
+  async function readArticle(data, entry, meaning) {
     const parts = articleParts(data);
     if (parts.length === 0) {
       entry.skipped = 'There is nothing on that page to read.';
@@ -156,10 +194,15 @@ export async function findAnswer(question, { search, article, run, signal, onPro
     }
 
     const options = meaningOptions(question);
-    const partRequest = buildPartRequest(question, data.title, parts);
+    const partRequest = buildPartRequest(question, data.title, parts, meaning);
     const answers = await ask(partRequest);
     const partRank = readChoice(answers.part, parts, 'p');
-    const meaning = readMeaning(answers.meaning, options);
+    const ownMeaning = meaning ? null : readMeaning(answers.meaning, options);
+    // What step 4 (and, when known this early, step 3) folds into its own instructions ("...which is asking for an
+    // explanation or a description?"), so the candidate has to match the kind of thing being asked for, not just the
+    // topic. Left out for "Something else": that option exists precisely for "not sure", so it isn't asserted as if
+    // it were an answer.
+    const topMeaning = meaning ?? (ownMeaning[0].label === 'other' ? null : options[ownMeaning[0].label]);
 
     const { tries, belowFloor, overCount } = worthTrying(partRank.ranked, max.parts, at.tryAt);
     if (belowFloor) left.floor = true;
@@ -182,16 +225,21 @@ export async function findAnswer(question, { search, article, run, signal, onPro
               chosen: `p${pick.index}`,
               options: choiceOptions(partRank.ranked, (r) => ({ key: `p${r.index}`, label: r.item.label }), partRank.none),
               confidence: confidenceOf(answers.part),
-              meaning: {
-                label: meaning[0].label,
-                p: meaning[0].p,
-                others: meaning.slice(1).filter((m) => m.p > 0),
-                instructions: partRequest.questions.meaning.instructions,
-                state: partRequest.state,
-                chosen: meaning[0].label,
-                options: meaning.map((m) => ({ key: m.label, label: options[m.label], p: m.p })),
-                confidence: confidenceOf(answers.meaning),
-              },
+              // Only here when step 0 didn't already settle it (see the `meaning` step of the trail for that case).
+              ...(ownMeaning
+                ? {
+                    meaning: {
+                      label: ownMeaning[0].label,
+                      p: ownMeaning[0].p,
+                      others: ownMeaning.slice(1).filter((m) => m.p > 0),
+                      instructions: partRequest.questions.meaning.instructions,
+                      state: partRequest.state,
+                      chosen: ownMeaning[0].label,
+                      options: ownMeaning.map((m) => ({ key: m.label, label: options[m.label], p: m.p })),
+                      confidence: confidenceOf(answers.meaning),
+                    },
+                  }
+                : {}),
             }
           : {}),
       });
@@ -203,7 +251,7 @@ export async function findAnswer(question, { search, article, run, signal, onPro
         continue;
       }
 
-      const { request, chunks } = buildAnswerRequest(question, data.title, part.label, candidates);
+      const { request, chunks } = buildAnswerRequest(question, data.title, part.label, candidates, topMeaning, aboutFor(data, part));
       const reply = await ask(request);
       const ranked = readAnswerChunks(reply, chunks);
       const top = ranked[0];
@@ -238,7 +286,7 @@ export async function findAnswer(question, { search, article, run, signal, onPro
 
   /** The final check on one sentence or row, and, if it passes and is a row, the refinement to its one piece. True when it is the answer. */
   async function judge(item, p, part, data) {
-    const checkRequest = buildCheckRequest(question, data.title, part.label, item);
+    const checkRequest = buildCheckRequest(question, data.title, part.label, item, aboutFor(data, part));
     const checked = readYesNo((await ask(checkRequest)).answers);
     add({
       id: 'check',
@@ -246,7 +294,7 @@ export async function findAnswer(question, { search, article, run, signal, onPro
       label: checked >= at.found ? 'answers the question' : 'does not state the answer',
       p: checked,
       instructions: checkRequest.questions.answers.instructions,
-      state: { question, article: data.title, part: part.label, sentence: item.text },
+      state: checkRequest.state, // the state really sent, `before`/`after`/`about` included when given, not just rebuilt from the basics
     });
 
     const found = {
@@ -290,7 +338,253 @@ export async function findAnswer(question, { search, article, run, signal, onPro
     return true;
   }
 
+  /** Step 0: what kind of question this is, plus the false-premise and unanswerable gates, all from one request. */
+  async function classifyQuestion() {
+    const request = buildClassifyRequest(question);
+    const answers = await ask(request);
+    const result = readClassify(answers, question);
+    const top = result.ranked[0];
+    add({
+      id: 'classify',
+      title: 'Question type',
+      label: QUESTION_TYPE_LABELS[top.key],
+      p: top.p,
+      others: result.ranked.filter((r) => r !== top && r.p > 0).slice(0, 5).map((r) => ({ label: QUESTION_TYPE_LABELS[r.key], p: r.p })),
+      instructions: request.questions.type.instructions,
+      state: request.state,
+      chosen: top.key,
+      options: result.ranked.map((r) => ({ key: r.key, label: QUESTION_TYPE_LABELS[r.key], p: r.p })),
+      confidence: confidenceOf(answers.type),
+    });
+    add({
+      id: 'gate',
+      title: 'False premise / unanswerable',
+      label: `false premise ${Math.round(result.falsePremise * 100)}%, unanswerable ${Math.round(result.unanswerable * 100)}%`,
+      p: Math.max(result.falsePremise, result.unanswerable),
+      instructions: `${request.questions.falsePremise.instructions} ${request.questions.unanswerable.instructions}`,
+      state: request.state,
+    });
+    const topMeaning = result.meaning[0];
+    add({
+      id: 'meaning',
+      title: 'What it asks for',
+      label: result.meaningOptions[topMeaning.label],
+      p: topMeaning.p,
+      others: result.meaning.slice(1).filter((m) => m.p > 0).map((m) => ({ label: result.meaningOptions[m.label], p: m.p })),
+      instructions: request.questions.meaning.instructions,
+      state: request.state,
+      chosen: topMeaning.label,
+      options: result.meaning.map((m) => ({ key: m.label, label: result.meaningOptions[m.label], p: m.p })),
+      confidence: confidenceOf(answers.meaning),
+    });
+    return {
+      top: top.key,
+      confidence: top.p,
+      falsePremise: result.falsePremise,
+      unanswerable: result.unanswerable,
+      // Passed to `readArticle` for steps 3 and 4; "Something else" exists precisely for "not sure", so it isn't
+      // asserted as if it were an answer.
+      meaning: topMeaning.label === 'other' ? null : result.meaningOptions[topMeaning.label],
+    };
+  }
+
+  /** Run `findAnswer` again, for a sub-question, sharing this run's budget and network functions. Throws `Stopped` if the sub-run was aborted. */
+  async function subAnswer(subQuestion) {
+    const budget = max.requests - state.requests;
+    if (budget <= 0) throw new GaveUp(`Gave up after ${max.requests} requests to Jev.`);
+    const sub = await findAnswer(subQuestion, { search, article, run, signal, quick: false, refine, classify: false, limits: { ...max, requests: budget }, thresholds: at, avoid });
+    state.requests += sub.requests;
+    state.tokens += sub.tokens;
+    state.log.push(...sub.log);
+    if (sub.status === 'stopped') throw new Stopped();
+    return sub;
+  }
+
+  /**
+   * Phase 3 (Multi-Part): split the question into independently-answerable parts (best-effort, in code — Jev only
+   * chooses between options, it cannot write the split itself), answer each in turn (a later part's leading pronoun is
+   * resolved to the first part's entity), and join the answers. Returns false when the question couldn't be split with
+   * confidence, so the caller falls back to the single-entity pipeline instead of guessing.
+   */
+  async function runMultiPart(rawQuestion) {
+    const parts = splitMultiPart(rawQuestion);
+    if (!parts) return false;
+    const subs = [];
+    let entity = null;
+    for (const [i, rawPart] of parts.entries()) {
+      guard();
+      const part = i === 0 ? rawPart : resolvePronoun(rawPart, entity ?? '');
+      const sub = await subAnswer(part);
+      add({ id: 'subquestion', title: `Part ${i + 1} of ${parts.length}`, label: part, p: sub.answer?.checked ?? 0, note: sub.status === 'found' ? undefined : sub.reason || 'Not found.', sub: sub.trail });
+      if (sub.status !== 'found') {
+        state.status = 'not-found';
+        state.reason = `Part ${i + 1} ("${part}") could not be answered. ${sub.reason || ''}`.trim();
+        return true;
+      }
+      subs.push(sub.answer);
+      if (i === 0) entity = sub.answer.title;
+    }
+    state.answer = {
+      text: subs.map((s, i) => `${i + 1}. ${s.text}`).join('\n'),
+      parts: subs,
+      title: [...new Set(subs.map((s) => s.title))].join(', '),
+      url: subs[0].url,
+      p: Math.min(...subs.map((s) => s.p)),
+      checked: Math.min(...subs.map((s) => s.checked)),
+      refined: '',
+    };
+    state.status = 'found';
+    return true;
+  }
+
+  /**
+   * Phase 3 (Comparison): parse the two entities and the property being compared (best-effort, in code), find each
+   * entity's value with the single-entity pipeline, then let Jev decide the comparison from the two facts found — not
+   * code parsing numbers out of free text. Returns false when the question didn't match a recognised pattern.
+   */
+  async function runComparison(rawQuestion) {
+    const parsed = parseComparison(rawQuestion);
+    if (!parsed) return false;
+    const { property, entities } = parsed;
+    const results = [];
+    for (const entity of entities) {
+      guard();
+      const subQuestion = attributeQuestion(entity, property);
+      const sub = await subAnswer(subQuestion);
+      add({ id: 'subquestion', title: entity, label: subQuestion, p: sub.answer?.checked ?? 0, note: sub.status === 'found' ? undefined : sub.reason || 'Not found.', sub: sub.trail });
+      if (sub.status !== 'found') {
+        state.status = 'not-found';
+        state.reason = `Could not find ${property} for ${entity}. ${sub.reason || ''}`.trim();
+        return true;
+      }
+      results.push(sub);
+    }
+
+    const budget = max.requests - state.requests;
+    if (budget <= 0) throw new GaveUp(`Gave up after ${max.requests} requests to Jev.`);
+    const compareRequest = buildCompareRequest(rawQuestion, property, entities, results.map((r) => r.answer.text));
+    const answers = await ask(compareRequest);
+    const { ranked } = readChoice(answers.compare, entities, 'e');
+    const top = ranked[0];
+    const chosen = results[top.index];
+    add({
+      id: 'compare',
+      title: 'Compared',
+      label: `${top.item} has more ${property}`,
+      p: top.p,
+      others: ranked.filter((r) => r !== top).map((r) => ({ label: r.item, p: r.p })),
+      instructions: compareRequest.questions.compare.instructions,
+      state: compareRequest.state,
+      chosen: `e${top.index}`,
+      options: ranked.map((r) => ({ key: `e${r.index}`, label: r.item, p: r.p })),
+      confidence: confidenceOf(answers.compare),
+    });
+    state.answer = { text: `${top.item} — ${chosen.answer.text}`, title: chosen.answer.title, url: chosen.answer.url, part: chosen.answer.part, p: top.p, checked: chosen.answer.checked, refined: '', compared: results.map((r, i) => ({ entity: entities[i], ...r.answer })) };
+    state.status = 'found';
+    return true;
+  }
+
+  /**
+   * Phase 4 (Negation): enumerate a candidate set from a "List of …" article (best-effort domain guess, in code), then
+   * ask one batched Yes/No per candidate against the condition with its negation removed, and return the one candidate
+   * Jev is confident does *not* satisfy it. Returns false when the question's subject couldn't be identified; falls
+   * back to "not found" (rather than guessing) when zero or more than one candidate passes the filter.
+   */
+  async function runNegation(rawQuestion) {
+    const parsed = parseNegation(rawQuestion);
+    if (!parsed) return false;
+    const { subject, listQuery, positive } = parsed;
+
+    guard();
+    const results = (await search(listQuery, SEARCH_LIMIT)).results ?? [];
+    state.searched.push(listQuery);
+    if (results.length === 0) {
+      state.status = 'not-found';
+      state.reason = `No Wikipedia article was found listing "${subject}" to check the candidates against.`;
+      return true;
+    }
+    add({ id: 'term', title: 'Search term', label: listQuery, p: 1, note: 'the set of candidates for the negation', others: [] });
+
+    let data;
+    try {
+      data = await article(results[0].title);
+    } catch (err) {
+      if (signal?.aborted || err?.name === 'AbortError') throw new Stopped();
+      if (err?.status !== 404) throw err;
+      state.status = 'not-found';
+      state.reason = `"${results[0].title}" could not be read.`;
+      return true;
+    }
+    guard();
+    state.read.push(data.title);
+    add({ id: 'article', title: 'Article', label: data.title, p: 1, note: 'listing the candidates', others: [] });
+
+    if (data.disambiguation) {
+      state.status = 'not-found';
+      state.reason = `"${data.title}" is a disambiguation page, not a list of candidates.`;
+      return true;
+    }
+    const rows = articleParts(data).flatMap((p) => partCandidates(p)).filter((c) => c.text);
+    const names = [...new Set(rows.map((c) => candidateName(c.text)))].slice(0, MAX_CHOICES);
+    if (names.length === 0) {
+      state.status = 'not-found';
+      state.reason = `"${data.title}" did not have a list of candidates to check.`;
+      return true;
+    }
+
+    const budget = max.requests - state.requests;
+    if (budget <= 0) throw new GaveUp(`Gave up after ${max.requests} requests to Jev.`);
+    const filterRequest = buildFilterRequest(rawQuestion, positive, subject, names);
+    const answers = await ask(filterRequest);
+    const filtered = readFilter(answers, names).sort((a, b) => a.p - b.p);
+    const passing = filtered.filter((f) => f.p <= at.negation);
+    add({
+      id: 'negation',
+      title: 'Checked against each candidate',
+      label: passing.length === 1 ? passing[0].candidate : `${passing.length} candidates matched`,
+      p: passing.length ? 1 - passing[0].p : 0,
+      note: `${names.length} candidates from "${data.title}", checked against "${positive}"`,
+      others: filtered.slice(0, 8).map((f) => ({ label: f.candidate, p: 1 - f.p })),
+    });
+
+    if (passing.length !== 1) {
+      state.status = 'not-found';
+      state.reason =
+        passing.length === 0
+          ? `None of the ${names.length} candidates from "${data.title}" satisfied the negation with enough confidence.`
+          : `${passing.length} candidates satisfied the negation, so a single one could not be settled on: ${passing.map((p) => p.candidate).join(', ')}.`;
+      return true;
+    }
+    state.answer = { text: passing[0].candidate, refined: '', title: data.title, part: '', url: articleUrl(data.title), p: 1 - passing[0].p, checked: 1 - passing[0].p };
+    state.status = 'found';
+    return true;
+  }
+
   try {
+    let handled = false;
+    let stepMeaning = null; // step 0's "what does it ask for?", passed to readArticle so step 3 can use it too, not just step 4
+    if (classify) {
+      const cls = await classifyQuestion();
+      stepMeaning = cls.meaning;
+      if (cls.unanswerable >= at.unanswerable) {
+        state.status = 'unanswerable';
+        state.reason = 'Jev is confident this question lacks a coherent, answerable structure, so no search was made.';
+        handled = true;
+      } else if (cls.falsePremise >= at.falsePremise) {
+        state.status = 'false-premise';
+        state.reason = 'Jev is confident this question rests on a false assumption, so no search was made.';
+        handled = true;
+      } else if (cls.confidence >= at.route) {
+        if (cls.top === 'multi-part') handled = await runMultiPart(question);
+        else if (cls.top === 'comparison') handled = await runComparison(question);
+        else if (cls.top === 'negation') handled = await runNegation(question);
+      }
+    }
+    if (handled) {
+      emit();
+      return snapshot();
+    }
+
     let terms = searchTerms(question);
     if (terms.length === 0) throw new GaveUp('There is no question to look up.');
     // Search terms an earlier run used are left out, unless that is all there is.
@@ -407,7 +701,7 @@ export async function findAnswer(question, { search, article, run, signal, onPro
           continue;
         }
 
-        await readArticle(data, entry);
+        await readArticle(data, entry, stepMeaning);
         if (state.answer) return;
       }
     }

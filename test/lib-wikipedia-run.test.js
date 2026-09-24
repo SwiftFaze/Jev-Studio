@@ -6,7 +6,8 @@ import { cleanTrail, mergeTables, parseInfobox, parseTables, searchTerms, splitS
 import { cleanSettings, DEFAULT_SETTINGS, findAnswer as findAnswerWith, LIMITS, runOptions, SETTING_RANGES } from '../public/lib/wikipedia-run.js';
 
 // Most of these tests are about the steps before the last one, which cuts a row into its pieces, so that is off unless a test turns it on.
-const findAnswer = (question, options = {}) => findAnswerWith(question, { refine: false, ...options });
+// Classification (step 0) is its own test section below, with its own fakeJev rules, so it is off here by default too.
+const findAnswer = (question, options = {}) => findAnswerWith(question, { refine: false, classify: false, ...options });
 
 const fixture = (name) => JSON.parse(readFileSync(new URL(`./fixtures/wikipedia/${name}`, import.meta.url), 'utf8'));
 
@@ -106,6 +107,17 @@ test('the best case takes five requests to Jev: term, article, part, answer, che
   assert.equal(result.answer.checked, 0.93);
 });
 
+test('log keeps every request sent to Jev and the response it gave, in order, the exact pair — for exporting the run', async () => {
+  const jev = fakeJev();
+  const result = await findAnswer(QUESTION, { ...fakeWorld(), run: jev.run });
+  assert.equal(result.log.length, 5);
+  assert.deepEqual(result.log.map((entry) => Object.keys(entry.request.questions)[0]), ['term', 'article', 'part', 'answer0', 'answers']);
+  for (const entry of result.log) {
+    assert.equal(entry.request, jev.requests[result.log.indexOf(entry)], 'the exact request object, not a copy');
+    assert.ok(entry.response.answers, 'the exact response, answers and usage included');
+  }
+});
+
 test('the trail says what Jev chose at each step and how sure it was, with the runners-up and what the question means', async () => {
   const jev = fakeJev();
   const { trail } = await findAnswer(QUESTION, { ...fakeWorld(), run: jev.run });
@@ -131,9 +143,13 @@ test('the question asked at each step is the one Jev is meant to see', async () 
   assert.equal(Object.keys(article.questions).filter((id) => /^s\d+$/.test(id)).length, 3, 'a Yes / No for each snippet, in the same request');
   assert.deepEqual(part.state, { question: QUESTION, article: 'Paris' });
   assert.ok('meaning' in part.questions, 'what the question means is asked in the same request as the part');
-  assert.deepEqual(answer.state, { question: QUESTION, article: 'Paris', part: 'Infobox' });
+  assert.equal(answer.state.question, QUESTION);
+  assert.equal(answer.state.article, 'Paris');
+  assert.equal(answer.state.part, 'Infobox');
+  assert.ok(answer.state.about?.length > 0, 'the Infobox has no context of its own, so a Lead excerpt grounds the choice');
   assert.equal(check.state.part, 'Infobox');
   assert.match(check.state.sentence, /^Area: /);
+  assert.ok(check.state.about?.length > 0, 'the same grounding for the final check');
 });
 
 test('the runner-up search term is searched too when Jev is under 60% sure, and the results are merged without repeats', async () => {
@@ -414,7 +430,7 @@ test('after the first, an article or part is only tried if Jev gave it at least 
 /* ---------- settings, limits and different paths ---------- */
 
 test('the settings start at the defaults, are checked when stored, and become the options findAnswer takes', () => {
-  assert.deepEqual(DEFAULT_SETTINGS, { requests: 12, articles: 3, parts: 3, terms: 3, candidates: 3, accept: 60, skipUnder: 5, quick: true, refine: true });
+  assert.deepEqual(DEFAULT_SETTINGS, { requests: 12, articles: 3, parts: 3, terms: 3, candidates: 3, accept: 60, skipUnder: 5, quick: true, refine: true, classify: true });
   assert.deepEqual(cleanSettings(undefined), DEFAULT_SETTINGS);
   assert.deepEqual(cleanSettings('junk'), DEFAULT_SETTINGS);
   assert.deepEqual(
@@ -430,7 +446,7 @@ test('the settings start at the defaults, are checked when stored, and become th
     assert.equal(cleanSettings({ [key]: high + 1 })[key], DEFAULT_SETTINGS[key], key);
   }
 
-  assert.deepEqual(runOptions(DEFAULT_SETTINGS), { limits: { requests: 12, articles: 3, parts: 3, terms: 3, candidates: 3 }, thresholds: { found: 0.6, tryAt: 0.05 }, quick: true, refine: true });
+  assert.deepEqual(runOptions(DEFAULT_SETTINGS), { limits: { requests: 12, articles: 3, parts: 3, terms: 3, candidates: 3 }, thresholds: { found: 0.6, tryAt: 0.05 }, quick: true, refine: true, classify: true });
   const none = runOptions({ requests: null, articles: null, parts: null, terms: null, candidates: null, accept: 80, skipUnder: 0, quick: false, refine: false });
   assert.deepEqual(none.limits, { requests: Infinity, articles: Infinity, parts: Infinity, terms: Infinity, candidates: Infinity });
   assert.deepEqual([none.thresholds, none.quick, none.refine], [{ found: 0.8, tryAt: 0 }, false, false]);
@@ -459,7 +475,7 @@ test('the request limit can be raised, or removed: it then stops only when there
   assert.match(more.reason, /did not find text/, 'it ran out of places to look, not out of requests');
 
   const unlimited = hopeless();
-  const all = await findAnswer(QUESTION, { ...unlimited.world, run: unlimited.jev.run, ...runOptions({ ...DEFAULT_SETTINGS, requests: null }) });
+  const all = await findAnswer(QUESTION, { ...unlimited.world, run: unlimited.jev.run, ...runOptions({ ...DEFAULT_SETTINGS, requests: null }), classify: false });
   assert.equal(all.requests, more.requests, 'no limit gets no further than a high one when the candidates run out');
 
   const one = hopeless();
@@ -480,7 +496,7 @@ test('the article and part limits can be raised or removed, and the articles lim
   };
   const opened = async (options) => {
     const world = fakeWorld({ results, pages });
-    const result = await findAnswer(QUESTION, { ...world, run: fakeJev(rules).run, ...options });
+    const result = await findAnswer(QUESTION, { ...world, run: fakeJev(rules).run, ...options, classify: false });
     return { opened: world.opened.length, parts: result.trail.filter((s) => s.id === 'part').length };
   };
   assert.equal((await opened({ limits: { requests: Infinity, articles: 5 } })).opened, 5);
@@ -596,9 +612,9 @@ test('a step Jev was asked carries what the trail needs to draw the same card as
   assert.match(answer.options[0].key, /^#\d+$/, 'a sentence is numbered by its place in the part');
   assert.match(answer.options[0].label, /^Area: /);
   assert.equal(answer.options.at(-1).key, 'none');
-  assert.match(check.instructions, /state the answer to/);
+  assert.match(check.instructions, /is `sentence` the thing/);
   assert.match(check.state.sentence, /^Area: /);
-  assert.deepEqual(Object.keys(check.state).sort(), ['article', 'part', 'question', 'sentence']);
+  assert.deepEqual(Object.keys(check.state).sort(), ['about', 'article', 'part', 'question', 'sentence']);
 });
 
 test('a "Not found" says why it stopped: options Jev rated under the floor, or a limit, and which setting to change', async () => {
@@ -607,7 +623,7 @@ test('a "Not found" says why it stopped: options Jev rated under the floor, or a
   const results = [{ title: 'First', snippet: 'a' }, { title: 'Second', snippet: 'b' }, { title: 'Third', snippet: 'c' }];
   const pages = { First: oneSection('First'), Second: oneSection('Second'), Third: oneSection('Third') };
   const jev = () => fakeJev({ article: () => ({ a0: 0.9, a1: 0.04, a2: 0.03 }), part: () => ({ p0: 0.9, p1: 0.03 }), answer: () => ({ none: 0.9 }) });
-  const ask = (options) => findAnswer('what is it?', { ...fakeWorld({ results, pages }), run: jev().run, ...options });
+  const ask = (options) => findAnswer('what is it?', { ...fakeWorld({ results, pages }), run: jev().run, ...options, classify: false });
 
   const floor = await ask({});
   assert.equal(floor.status, 'not-found');
@@ -675,7 +691,7 @@ test('the trail keeps every option Jev was given, not only the top few: all the 
 
 /* ---------- the next best answer, the exact check, and refining a row ---------- */
 
-const refined = (question, options = {}) => findAnswerWith(question, options);
+const refined = (question, options = {}) => findAnswerWith(question, { classify: false, ...options });
 const areaRows = (q) => keyFor(q.criteria, /^Area: /);
 
 test('when the check turns the best row down, the next best row of the same part is checked, with no new request to choose', async () => {
@@ -710,16 +726,19 @@ test('how many rows of a part are checked is limited, and a row Jev gave under t
   assert.match(limited.reason, /limits on articles, parts or search terms/);
 
   const all = fakeJev(rules());
-  await findAnswer(QUESTION, { ...fakeWorld(), run: all.run, ...runOptions({ ...DEFAULT_SETTINGS, refine: false, skipUnder: 0, candidates: null }) });
+  await findAnswer(QUESTION, { ...fakeWorld(), run: all.run, ...runOptions({ ...DEFAULT_SETTINGS, refine: false, skipUnder: 0, candidates: null }), classify: false });
   assert.ok(all.requests.filter((r) => 'answers' in r.questions).length >= 3, 'with no floor and no limit every row is checked');
 });
 
-test('the final check asks for every detail of the question to match, not only for an answer of the right kind', async () => {
+test('the final check grounds the candidate in the part it came from, and asks whether it is what the question asks for', async () => {
   const jev = fakeJev();
   await findAnswer(QUESTION, { ...fakeWorld(), run: jev.run });
   const check = jev.requests.find((r) => 'answers' in r.questions);
-  assert.match(check.questions.answers.instructions, /exactly what the question specifies/);
-  assert.match(check.questions.answers.instructions, /model, engine, year or place/);
+  // A row names no subject of its own, so the check is told which article's subject it is about.
+  assert.match(check.questions.answers.instructions, /from the part "Infobox" of the article "Paris"/);
+  // What the question asks for, written out — not which of the question's details the row repeats.
+  assert.ok(check.questions.answers.instructions.includes(`the thing "${QUESTION}" asks for`));
+  assert.match(check.questions.answers.instructions, /a different fact about the same subject/);
 });
 
 test('a row that passes the check is cut into its pieces, and Jev picks the one that is the answer', async () => {

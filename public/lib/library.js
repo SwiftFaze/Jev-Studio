@@ -83,6 +83,14 @@ export function parseSetFile(text) {
 export const editPageOf = (set) => (set?.origin === 'batch' ? 'batch' : 'custom');
 export const EDIT_PAGE_LABEL = { custom: 'Single', batch: 'Batch' };
 
+/**
+ * Whether a set runs one item at a time. A set saved from Batch judges each pasted line on its own against its
+ * questions, one request per line, so its page is the items box and the batch table; every other set runs its
+ * questions once, over one pasted context, so its page is the context box and one set of answers. Which page a set
+ * opens on follows from this, and nothing else.
+ */
+export const isBatchSet = (set) => editPageOf(set) === 'batch';
+
 /** Add a set, replacing one with the same name (case-insensitive). Newest first. `origin: 'batch'` marks a set saved from Batch. */
 export function upsertSet(sets, name, questions, { description = '', origin = null, now = Date.now() } = {}) {
   const clean = name.trim();

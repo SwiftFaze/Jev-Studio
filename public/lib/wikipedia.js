@@ -11,9 +11,18 @@ export const MAX_CHOICES = 250; // the API allows 255 options in a Choice; this 
 export const MAX_CHUNKS = 4; // a part is cut into at most this many Choices in one request (1,000 candidates)
 export const MAX_TERMS = 10;
 export const MAX_RESULTS = 12; // articles Jev picks from at step 2
+export const ABOUT_CHARS = 400; // the Lead excerpt given as context for a part with none of its own (an infobox or table row)
 
 const clip = (text, max = MAX_OPTION_CHARS) => (text.length > max ? `${text.slice(0, max - 1).trimEnd()}…` : text);
 const squash = (text) => text.replace(/\s+/g, ' ').trim();
+
+/**
+ * A short excerpt of the article's Lead (its first sentences, up to `ABOUT_CHARS`), to ground steps 4 and 5 in what
+ * the subject actually is. An infobox row or a table row has no `before`/`after` of its own (a bare "Developer:
+ * TypeSafe AI" has no neighbours to give it context, unlike a sentence or a row of a table with column headers), so
+ * without this, ranking or checking among them happens with nothing but the bare label and value to go on.
+ */
+export const leadExcerpt = (sentences) => (sentences?.length ? clip(sentences.join(' '), ABOUT_CHARS) : null);
 
 /* ---------- links ---------- */
 
@@ -157,13 +166,31 @@ const ABBREVIATION = /(?:^|[\s(])(?:St|Mt|Mr|Mrs|Ms|Dr|Prof|Jr|Sr|Gen|Col|Lt|Cap
 const INITIAL = /(?:^|[\s(])\p{Lu}\.$/u;
 const segmenter = new Intl.Segmenter('en', { granularity: 'sentence' });
 
+// A line with no sentence-ending punctuation, immediately followed (no blank line between them) by a line starting
+// with a lowercase letter, is a wrapped line, not a real line break — Wikipedia's plain-text extract sometimes leaves
+// a stray newline where a citation reference used to be ("...confidence\nscores." for "...confidence scores."). Joined
+// back into one line before sentences are found in it; a blank line, or the next line starting uppercase, is still a
+// real break (so "First line" on its own, or a genuine new paragraph, is untouched).
+const ENDS_SENTENCE = /[.!?]['"”’)\]]*$/;
+function joinWrappedLines(rawLines) {
+  const lines = [];
+  for (const raw of rawLines) {
+    const trimmed = raw.trim();
+    const prev = lines.at(-1);
+    if (trimmed && prev && !ENDS_SENTENCE.test(prev) && /^[a-z]/.test(trimmed)) lines[lines.length - 1] = `${prev} ${trimmed}`;
+    else lines.push(trimmed);
+  }
+  return lines;
+}
+
 /**
- * The sentences of some text, in order. Every line is read on its own (a line of a list is one entry). Decimals such as
- * `105.4`, abbreviations such as `St.` and `c.`, initials, and `[3]`-style marks do not confuse it, and it needs no library.
+ * The sentences of some text, in order. Every line is read on its own (a line of a list is one entry), once a wrapped
+ * line (see `joinWrappedLines`) is put back together. Decimals such as `105.4`, abbreviations such as `St.` and `c.`,
+ * initials, and `[3]`-style marks do not confuse it, and it needs no library.
  */
 export function splitSentences(text) {
   const out = [];
-  for (const line of String(text ?? '').split(/\r?\n/)) {
+  for (const line of joinWrappedLines(String(text ?? '').split(/\r?\n/))) {
     const clean = squash(stripNoteMarks(line));
     if (!clean) continue;
     let carry = '';
@@ -528,6 +555,213 @@ export function meaningOptions(question) {
 
 const indexKeys = (prefix, items, describe) => Object.fromEntries(items.map((item, i) => [`${prefix}${i}`, describe(item)]));
 
+/* ---------- question classification (step 0) ---------- */
+
+// The tuned definitions from the labelled test set: what each question type means, verbatim, so Jev classifies against
+// the same criteria that were refined against real examples. `QUESTION_TYPE_LABELS` is the short name for the trail.
+export const QUESTION_TYPE_LABELS = {
+  'direct-fact': 'Direct Fact',
+  attribute: 'Attribute',
+  'multi-part': 'Multi-Part',
+  comparison: 'Comparison',
+  temporal: 'Temporal',
+  'cause-effect': 'Cause & Effect',
+  'entity-from-clues': 'Entity from Clues',
+  'reverse-lookup': 'Reverse Lookup',
+  negation: 'Negation',
+  'false-premise': 'False Premise',
+  'ambiguous-entity': 'Ambiguous Entity',
+  superlative: 'Superlative',
+  counting: 'Counting',
+  'cross-entity': 'Cross-Entity',
+  'historical-change': 'Historical Change',
+  'set-membership': 'Set Membership',
+  unanswerable: 'Unanswerable',
+};
+export const QUESTION_TYPE_CRITERIA = {
+  'direct-fact':
+    "Asks for a specific, well-established factual answer that can be retrieved directly. Includes cases where the entity is described rather than named, as long as the description is a single, canonical, widely-known epithet that functions as the fact's common label (e.g., \"the first person to walk on the Moon,\" \"the discoverer of the theory of evolution\") — no multi-clue reasoning is required, just recall. Excludes questions where the entity must be identified by satisfying an explicitly negated condition stated in the question (not, never, did not, without, etc.) — even when the underlying fact is well-known. Those are Negation, regardless of how directly recallable the answer is.",
+  attribute:
+    "Asks for a property or associated detail (population, location, language, occupation, date, capital, status, etc.) of an explicitly identified entity, where that entity is the grammatical subject of the question (e.g., \"What is Japan's population?\"). Excludes fixed universal facts or definitions (e.g., chemical symbols, mathematical constants, unit conversions), which are Direct Fact. Also excludes cases where the requested property does not meaningfully apply to the named entity (e.g., asking a city's \"height\") — classify those as False Premise instead. Does not apply when the question instead names an object, landmark, or work and asks which entity it belongs to — see Reverse Lookup.",
+  'multi-part':
+    'Contains two or more distinct information requests that can be answered independently. Takes precedence over other categories when ≥2 independently-answerable asks are present, even if one sub-part would otherwise match another category on its own.',
+  comparison: 'Asks to compare two or more explicitly identified entities, events, places, quantities, or properties.',
+  temporal:
+    'Primarily asks when something happened, what year or date it occurred, how long it lasted, or about the chronological order or timing of events.',
+  'cause-effect':
+    'Asks why something happened, what caused it, what resulted from it, or about a causal relationship between events or conditions. Includes questions asking how one entity/event influenced, affected, or contributed to another (causal-verb framing). Takes precedence over Cross-Entity whenever a causal verb (influence, effect, contribution, result, cause) is used.',
+  'entity-from-clues':
+    'Asks for the identity of an unnamed entity that must be identified by combining multiple distinguishing details, or from an uncommon/non-canonical description requiring inference rather than recall of a well-known label. (Contrast with Direct Fact, which covers single, famous, standard descriptors.)',
+  'reverse-lookup':
+    'Asks which entity is associated with a specific object, landmark, place, work, invention, event, or other distinctive item named in the question, where that named item is the object being pointed at (e.g., "Which city is home to the Eiffel Tower?"). This takes precedence over Attribute whenever a specific landmark/object/work is named and the question asks what it belongs to, is located in, or was created by.',
+  negation:
+    "Asks for something that does not satisfy a condition, using negative concepts such as not, never, except, didn't, without, or equivalent wording. If the question's negated premise is itself factually false (e.g., implies an exception exists when none actually does), classify as False Premise instead.",
+  'false-premise':
+    'Contains an assumption presented as true that is factually false, historically incorrect, or contradicted by reliable information, so the premise must be recognized as incorrect before answering. Includes cases where a negation-phrased question presupposes a false exception, and cases where an Attribute-style question asks for a property that does not meaningfully apply to the named entity.',
+  'ambiguous-entity':
+    'Contains a name or term that could reasonably refer to multiple different entities, and no clearly dominant/default referent is implied by the rest of the question. If context makes one reading clearly primary (e.g., "Washington" defaulting to Washington, D.C. in a founding-date question), classify by the question\'s main category instead (e.g., Temporal) rather than as Ambiguous Entity.',
+  superlative:
+    'Asks to identify an entity because it has an extreme or ranked property relative to others, such as largest, smallest, oldest, newest, longest, highest, most populous, or similar. A well-established historical fact involving "first" or "last" is not automatically a Superlative.',
+  counting: 'Asks how many entities, items, occurrences, or members satisfy a specified condition.',
+  'cross-entity':
+    'Asks about a relationship, connection, association, influence, or interaction between two or more identifiable entities. Reserved for associative or comparative relationships without a causal verb (e.g., "collaborated with," "is known for," "relates to"). When the question asks specifically about causal impact between entities/events, classify as Cause & Effect instead. Requires two or more entities to be explicitly named in the question itself. Does not apply when only one entity is named and the question asks to identify an unnamed second entity connected to it (e.g., "Which river is associated with Mesopotamia?") — those are Attribute or Reverse Lookup depending on framing, not Cross-Entity.',
+  'historical-change':
+    'Asks how an entity, place, institution, territory, name, status, or other subject changed between different historical periods, including historical-to-modern names or statuses.',
+  'set-membership': 'Asks which entities belong to a specified group, organization, alliance, category, geographic set, or other defined collection.',
+  unanswerable:
+    'When the sequence lacks coherent grammatical structure or a discernible relationship between its words, even if individual words are topical, temporal, numeric, or otherwise meaningful in isolation. A single coherent-sounding word or phrase embedded in an otherwise disconnected sequence does not establish intent for any other category.',
+};
+
+/**
+ * Step 0: what kind of question this is, two gates, and what the question is asking for (`meaningOptions`) — all in
+ * one request (so it costs one call to Jev, not four): a Choice across `QUESTION_TYPE_CRITERIA` (verbatim, tuned
+ * criteria), a Yes / No for each gate, and the "what does it ask for" Choice that used to be asked again for every
+ * article tried (it only depends on `question`, never on the article), and too late to help choose the right part of
+ * one (step 3) — only the sentence within it (step 4). Settling it here, before any article is opened, lets both use it.
+ */
+export function buildClassifyRequest(question) {
+  return {
+    state: { question },
+    questions: {
+      type: { type: 'choice', instructions: 'What kind of question is `question`? Choose the category that best fits it.', criteria: QUESTION_TYPE_CRITERIA },
+      falsePremise: {
+        type: 'noul',
+        instructions:
+          '`question` contains an assumption presented as true. Is that assumption factually false, historically incorrect, or contradicted by reliable information, so it must be corrected before the question can be answered?',
+      },
+      unanswerable: {
+        type: 'noul',
+        instructions:
+          'Is `question` unanswerable because it lacks a coherent grammatical structure or a discernible request, even if individual words in it are topical or otherwise meaningful in isolation?',
+      },
+      meaning: { type: 'choice', instructions: 'What is `question` asking for?', criteria: meaningOptions(question) },
+    },
+  };
+}
+
+/**
+ * Step 0's Choice, ranked best first (every type listed), the two gates as probabilities from 0 to 1, and the meaning
+ * Choice, ranked the same way `readMeaning` does (with its own options, to look up a ranked key's description).
+ */
+export function readClassify(answers, question) {
+  const probs = answers?.type?.probabilities ?? (answers?.type?.choice ? { [answers.type.choice]: 1 } : {});
+  const ranked = Object.keys(QUESTION_TYPE_CRITERIA)
+    .map((key) => ({ key, p: Number(probs[key]) || 0 }))
+    .sort((a, b) => b.p - a.p);
+  const meaningOpts = meaningOptions(question);
+  return {
+    ranked,
+    falsePremise: readYesNo(answers?.falsePremise),
+    unanswerable: readYesNo(answers?.unanswerable),
+    meaning: readMeaning(answers?.meaning, meaningOpts),
+    meaningOptions: meaningOpts,
+  };
+}
+
+/* ---------- multi-entity splitting (Multi-Part and Comparison) ---------- */
+
+// A conjunction that starts a second, independently-answerable request ("…, and which countries does it pass through?").
+// Only splits before a question word or an auxiliary, so entity lists ("Canada and China") are left alone.
+const MULTI_PART_SPLIT = /\s*,?\s+and\s+(?=(?:which|what|who|whom|whose|when|where|why|how|does|do|did|is|are|was|were)\b)/i;
+const PRONOUN = /\b(it|he|she|they|this|that|those|these)\b/i;
+
+/**
+ * Split a Multi-Part question into its independently-answerable parts, best-effort. Returns `null` when no confident
+ * split is found (one part, or the question doesn't match the pattern), rather than guessing. A pronoun in a later
+ * part ("…and which countries does it pass through?") is left as `it` here; `resolvePronoun` fills it in once the
+ * part before it has an answer, since Jev only chooses between options code gives it — it cannot write that
+ * substitution itself.
+ */
+export function splitMultiPart(question) {
+  const parts = String(question)
+    .split(MULTI_PART_SPLIT)
+    .map((p) => squash(p))
+    .filter(Boolean);
+  if (parts.length < 2) return null;
+  return parts.map((p) => (/[.?!]$/.test(p) ? p : `${p}?`));
+}
+
+/** Replace the first pronoun in `part` with `entity` ("which countries does it pass through" → "…does Amazon River pass through"). */
+export function resolvePronoun(part, entity) {
+  return PRONOUN.test(part) ? part.replace(PRONOUN, entity) : part;
+}
+
+// "Which has more surface area, Canada or China?" / "Which is older, the Eiffel Tower or the Statue of Liberty?"
+const COMPARISON = /^\s*which\s+(?:one\s+)?(?:has|had|is|was|are|were)\s+(?:more|less|greater|higher|larger|bigger|smaller|older|younger|longer|shorter)\s+([^,?]+?)\s*,\s*(.+?)\s+or\s+(.+?)\s*\??\s*$/i;
+
+/**
+ * Parse a two-entity Comparison question into the property being compared and the two entities, best-effort. Returns
+ * `null` when the question doesn't match a recognised comparison pattern, so it can fall back to "uncertain" instead
+ * of guessing at entities that aren't really there.
+ */
+export function parseComparison(question) {
+  const m = COMPARISON.exec(String(question));
+  if (!m) return null;
+  const [, property, a, b] = m;
+  return { property: squash(property), entities: [squash(a), squash(b)] };
+}
+
+/** The sub-question to ask about one entity of a Comparison ("What is Canada's surface area?"). */
+export const attributeQuestion = (entity, property) => `What is ${/^(the|a|an)\s/i.test(entity) ? entity : `${entity}'s`} ${property}?`;
+
+/** Step, after both entities' answers are found: a Choice between them, so Jev decides the comparison, not code parsing numbers out of text. */
+export function buildCompareRequest(question, property, entities, texts) {
+  const pairs = entities.map((entity, i) => ({ entity, text: texts[i] }));
+  return {
+    state: { question, property },
+    questions: {
+      compare: {
+        type: 'choice',
+        instructions: 'Given these two facts, which one has more, or a higher/greater value of, `property`? Each option names the entity and states the fact found about it.',
+        criteria: indexKeys('e', pairs, (pair) => clip(`${pair.entity}: ${pair.text}`)),
+      },
+    },
+  };
+}
+
+/* ---------- negation (candidate enumeration) ---------- */
+
+// "Which U.S. state has never held a presidential primary?" → captures "U.S. state" as the set to enumerate.
+const NEGATION_SUBJECT = /^\s*(?:which|what)\s+([a-z][\w\s.'-]*?)\s+(?:has|have|had|does|do|did|is|are|was|were)\s+(?:never|not|no|n't)\b/i;
+// The condition, with its negation removed, phrased as a plain yes/no about a candidate: "held a presidential primary".
+const NEGATION_STRIP = /\b(never|not\s+once|n't|without\s+ever)\b\s*/gi;
+
+/** The set to search for ("U.S. state" → "List of U.S. states"), and a per-candidate Yes/No template, for a Negation question. */
+export function parseNegation(question) {
+  const m = NEGATION_SUBJECT.exec(String(question));
+  if (!m) return null;
+  const subject = squash(m[1]);
+  const listQuery = `List of ${/s$/i.test(subject) ? subject : `${subject}s`}`;
+  const positive = squash(String(question).replace(NEGATION_STRIP, '').replace(/\?\s*$/, ''));
+  return { subject, listQuery, positive };
+}
+
+// After the subject is swapped for a candidate ("Which U.S. state has held…" → "Which Wyoming has held…"), the leading
+// "which"/"what" no longer makes sense as a question word; this puts the auxiliary back in front to make it one
+// ("Has Wyoming held a presidential primary?"), since Jev is asked a Yes/No, not to pick from a list.
+const NEEDS_INVERSION = /^(?:which|what)\s+(.+?)\s+(has|have|had|does|do|did|is|are|was|were)\s+(.+)$/i;
+
+/** The Yes/No question for one candidate: the question's subject phrase, and the candidate's name, swapped into the positive form. */
+export function candidateQuestion(positive, subject, candidate) {
+  const re = new RegExp(`\\b${subject.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
+  const substituted = re.test(positive) ? positive.replace(re, candidate) : `${positive} — considering ${candidate}`;
+  const inverted = NEEDS_INVERSION.exec(substituted);
+  if (inverted) {
+    const [, subjectPart, aux, rest] = inverted;
+    return `${aux[0].toUpperCase()}${aux.slice(1)} ${subjectPart} ${rest}?`;
+  }
+  return /[.?!]$/.test(substituted) ? substituted : `${substituted}?`;
+}
+
+/** One batched request: a Yes/No per candidate, asking whether the (now positive) condition holds for it. */
+export function buildFilterRequest(question, positive, subject, candidates) {
+  const questions = {};
+  candidates.slice(0, MAX_CHOICES).forEach((c, i) => {
+    questions[`n${i}`] = { type: 'noul', instructions: `Is the answer yes to this question: "${candidateQuestion(positive, subject, c)}"?` };
+  });
+  return { state: { question }, questions };
+}
+
 /** Step 1: which search term is most likely to find the article. Options are `t0`, `t1`, …; `readChoice(answer, terms, 't')` maps them back. */
 export function buildTermRequest(question, terms) {
   return {
@@ -553,50 +787,96 @@ export function buildArticleRequest(question, results, { snippets = true } = {})
   return { state: { question }, questions };
 }
 
-/** Step 3: which part of the article, and (in the same request) what the question means. Options are `p0`…, and `none`. */
-export function buildPartRequest(question, title, parts) {
+/**
+ * Step 3: which part of the article. `meaning` is step 0's own answer to "what is `question` asking for?" (its
+ * description) — when given, it is folded into the instructions, the same way `buildAnswerRequest` does, so an
+ * infobox of raw facts isn't picked for a question asking for an explanation, and vice versa; that question is left
+ * out of this request, since it was already asked once, up front, rather than asked again for every article tried.
+ * When not given (`classify: false`), "what the question means" is asked here instead, in the same request — but
+ * only found out after the part is already chosen, too late to inform this choice, only the next one.
+ */
+export function buildPartRequest(question, title, parts, meaning) {
+  const questions = {
+    part: {
+      type: 'choice',
+      instructions: meaning
+        ? `Which part of the article \`article\` is most likely to state the answer to \`question\`, which is asking for ${lowerFirst(meaning)}?`
+        : 'Which part of the article `article` is most likely to state the answer to `question`?',
+      criteria: { ...indexKeys('p', parts, (p) => p.description), none: 'None of these parts is likely to state it' },
+    },
+  };
+  if (!meaning) questions.meaning = { type: 'choice', instructions: 'What is `question` asking for?', criteria: meaningOptions(question) };
   return {
     state: { question, article: title },
-    questions: {
-      part: {
-        type: 'choice',
-        instructions: 'Which part of the article `article` is most likely to state the answer to `question`?',
-        criteria: { ...indexKeys('p', parts, (p) => p.description), none: 'None of these parts is likely to state it' },
-      },
-      meaning: { type: 'choice', instructions: 'What is `question` asking for?', criteria: meaningOptions(question) },
-    },
+    questions,
   };
 }
 
+const lowerFirst = (s) => s.charAt(0).toLowerCase() + s.slice(1);
+
 /**
  * Step 4: which candidate states the answer. A part with more than 250 candidates is cut into chunks, one Choice each
- * (`answer0`, `answer1`, …) in the same request, and each has its own `none`. Returns the request and the chunks.
+ * (`answer0`, `answer1`, …) in the same request, and each has its own `none`. `meaning` is step 3's own answer to
+ * "what is `question` asking for?" (its description, e.g. "An explanation or a description") — when given, it is
+ * folded into the instructions, so the candidate has to match not just the topic but the kind of thing being asked
+ * for. Left out (or the catch-all "Something else") when step 3 wasn't sure, rather than guessing. Returns the
+ * request and the chunks.
  */
-export function buildAnswerRequest(question, title, partLabel, candidates) {
+export function buildAnswerRequest(question, title, partLabel, candidates, meaning, about) {
   const chunks = [];
   for (let i = 0; i < candidates.length && chunks.length < MAX_CHUNKS; i += MAX_CHOICES) chunks.push(candidates.slice(i, i + MAX_CHOICES));
   const questions = {};
+  // Confirmed live, twice, by hand: the backtick form below — "states the answer to `question`, which is asking for
+  // an explanation or a description" — produced a near three-way tie between the right candidate, a wrong-but-
+  // plausible one, and "none" on real candidates, letting the wrong one win narrowly and pass the check. The same
+  // candidates, asked "is an explanation or a description for <the literal question text, quoted>" — the question
+  // written directly into the instructions rather than left as `` `question` `` for `state` to fill in — gave a
+  // decisive result both times. `state` still carries `question`/`article`/`part` (for the trail and "Open in
+  // Single"); only what Jev is actually asked changes. Not yet confirmed for every `meaningOptions` phrasing, only
+  // "an explanation or a description" — nor isolated from `state` also being a plain string in both live tests
+  // rather than this object, which may be part of it too.
+  const asks = meaning ? `is ${lowerFirst(meaning)} for "${question}"` : `states the answer to "${question}"`;
+  const aboutNote = about ? ' (`about` is a short excerpt describing the subject, for context.)' : '';
+  const state = { question, article: title, part: partLabel };
+  if (about) state.about = about;
   chunks.forEach((chunk, c) => {
     questions[`answer${c}`] = {
       type: 'choice',
-      instructions: 'Which of these sentences, from the part `part` of the article `article`, states the answer to `question`?',
+      instructions: `Which of these sentences, from the part "${partLabel}" of the article "${title}", ${asks}?${aboutNote}`,
       criteria: { ...indexKeys('c', chunk, (cand) => cand.text), none: 'None of these states the answer' },
     };
   });
-  return { request: { state: { question, article: title, part: partLabel }, questions }, chunks };
+  return { request: { state, questions }, chunks };
 }
 
-/** Step 5: a Yes / No on the chosen candidate, with the sentence either side so it is read in context. */
-export function buildCheckRequest(question, title, partLabel, candidate) {
+/**
+ * Step 5: a Yes / No on the chosen candidate, with the sentence either side so it is read in context. `about` (see
+ * `leadExcerpt`) is the same grounding step 4 got, for a candidate — an infobox or table row — with no `before`/`after`
+ * of its own to check it against.
+ *
+ * Two things the wording has to do, both confirmed live against the wordings they replace (see `buildAnswerRequest`
+ * for the same two on step 4). It says where the candidate came from, because a row like "Type: Artificial
+ * intelligence model" names no subject of its own: read as a standalone sentence it is about nothing, and the check
+ * turned it down for "just mentioning the subject" when it does not even do that. And it asks whether the candidate is
+ * *the thing the question asks for* rather than whether every detail of the question appears in it — the detail form
+ * scored a row on how much of the question's wording it repeated, so for "what is jev ai typesafe" it preferred
+ * "Developer: TypeSafe AI" (0.65, and accepted) over the right row (0.45, and turned down). Asking what the question
+ * asks for reverses that (0.44 against 0.69) and also raises every candidate that was already passing. The near
+ * misses the detail clause existed to catch — the right kind of fact for the wrong year, model or place — are still
+ * caught by "a different fact about the same subject, or a fact about something else", and one that the detail clause
+ * let through (the city-proper population for a question about the metropolitan area, 0.66) is now caught too.
+ */
+export function buildCheckRequest(question, title, partLabel, candidate, about) {
   const state = { question, article: title, part: partLabel, sentence: candidate.text };
   if (candidate.before) state.before = candidate.before;
   if (candidate.after) state.after = candidate.after;
+  if (about) state.about = about;
   return {
     state,
     questions: {
       answers: {
         type: 'noul',
-        instructions: 'Does `sentence` state the answer to `question` for exactly what the question specifies, with every detail in it (such as the model, engine, year or place) matching, rather than for something similar or something else, or just mentioning the subject? (`before` and `after`, when given, are the text around it.)',
+        instructions: `\`sentence\` is from the part "${partLabel}" of the article "${title}", so its subject is that article's subject. Read this way, is \`sentence\` the thing "${question}" asks for, rather than a different fact about the same subject, or a fact about something else? (\`before\` and \`after\`, when given, are the text around it.${about ? ' `about` is a short excerpt describing the subject, for context.' : ''})`,
       },
     },
   };
@@ -653,6 +933,11 @@ export const readYesNo = (answer) => {
   return Number.isFinite(p) ? Math.min(1, Math.max(0, p)) : 0;
 };
 
+/** The answers to a batched negation filter: each candidate with the probability that the positive condition holds for it. */
+export function readFilter(answers, candidates) {
+  return candidates.slice(0, MAX_CHOICES).map((candidate, i) => ({ candidate, p: readYesNo(answers?.[`n${i}`]) }));
+}
+
 /** The answer to the meaning question: each option (keyed by its own name, not an index) with its probability, best first. */
 export function readMeaning(answer, options) {
   const probs = answer?.probabilities ?? (answer?.choice ? { [answer.choice]: 1 } : {});
@@ -666,7 +951,7 @@ export function readMeaning(answer, options) {
 export const MAX_SAVED = 50;
 export const MAX_SAVED_OPTIONS = 300; // options kept for a step of a saved answer: more than a step ever has (a part has at most 250 sentences a Choice, and 4 Choices)
 
-const STEP_IDS = new Set(['term', 'article', 'part', 'answer', 'check', 'refine']);
+const STEP_IDS = new Set(['term', 'article', 'part', 'answer', 'check', 'refine', 'classify', 'gate', 'meaning', 'subquestion', 'compare', 'negation']);
 const text = (v, max = 500) => (typeof v === 'string' ? v.slice(0, max) : '');
 const chance = (v) => (Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 0);
 const count = (v) => (Number.isFinite(v) && v >= 0 ? Math.round(v) : 0);
@@ -685,7 +970,9 @@ const cleanState = (state) =>
 
 /**
  * The steps of a run, checked: what the trail is drawn from, and so what is stored with a saved answer. Only text and
- * numbers are kept, cut to a sensible length, and only the five known kinds of step.
+ * numbers are kept, cut to a sensible length, and only the known kinds of step. A `subquestion` step (Multi-Part or
+ * Comparison) keeps its own nested trail the same way, one level deep — a sub-run is never itself classified, so it
+ * can never contain another `subquestion`.
  */
 export function cleanTrail(raw) {
   if (!Array.isArray(raw)) return [];
@@ -708,6 +995,7 @@ export function cleanTrail(raw) {
         options: cleanOptions(step.options),
         confidence: Number.isFinite(step.confidence) ? chance(step.confidence) : null,
         meaning: meaning ? { label: text(meaning.label, 60), p: chance(meaning.p), instructions: text(meaning.instructions, 700), state: cleanState(meaning.state), chosen: text(meaning.chosen, 40), options: cleanOptions(meaning.options), confidence: Number.isFinite(meaning.confidence) ? chance(meaning.confidence) : null } : null,
+        sub: Array.isArray(step.sub) ? cleanTrail(step.sub) : null,
       };
     });
 }

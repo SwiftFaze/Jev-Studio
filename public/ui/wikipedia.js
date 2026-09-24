@@ -5,6 +5,7 @@ import { addSavedAnswer, savedAnswer } from '../lib/wikipedia.js';
 import { pct } from '../results.js';
 import { postRun, postWikipediaArticle, postWikipediaSearch } from './api.js';
 import { flash } from './save-set.js';
+import { downloadText, fileStamp } from './download.js';
 import { revealPane } from './reveal.js';
 import { renderWikipediaSavedMenu } from './wikipedia-saved.js';
 import { answerBlock, sourceLink, statsView, stepsView } from './wikipedia-view.js';
@@ -36,7 +37,7 @@ const describeSettings = (s) =>
  * Everything shown from Wikipedia is text, drawn as text: the server passes on no HTML, and nothing here builds any.
  * Links are made only from an article title, so they always lead to en.wikipedia.org.
  */
-export function initWikipedia() {
+export function initWikipedia({ openInSingle } = {}) {
   const slice = app.wikipedia;
   const $ = (id) => document.querySelector(`#wikipedia-${id}`);
 
@@ -214,11 +215,23 @@ export function initWikipedia() {
   /* ---------- the bottom bar ---------- */
   const runBtn = h('button', { type: 'button', id: 'wikipedia-run', class: 'btn btn-primary', onclick: () => start() }, 'Find answer');
   const saveBtn = h('button', { type: 'button', id: 'wikipedia-save', class: 'btn', title: 'Keep this answer, with the steps Jev took, under Wikipedia answer in the menu', onclick: () => saveAnswer() }, 'Save answer');
+  const exportBtn = h(
+    'button',
+    { type: 'button', id: 'wikipedia-export', class: 'btn btn-ghost', title: 'Download every request sent to Jev and the response it gave, in order, as JSON', onclick: () => exportLog() },
+    'Export requests & responses',
+  );
   const againBtn = h('button', { type: 'button', id: 'wikipedia-again', class: 'btn', hidden: true, title: 'Ask again from the start, with the settings as they are now', onclick: () => start() }, 'Try again');
   const pathBtn = h('button', { type: 'button', id: 'wikipedia-path', class: 'btn', hidden: true, title: 'Ask again, but keep away from the articles and search terms already used', onclick: () => start({ differentPath: true }) }, 'Try a different path');
   const stopBtn = h('button', { type: 'button', id: 'wikipedia-stop', class: 'btn', hidden: true, onclick: () => controller?.abort() }, 'Stop');
   const statusEl = h('span', { id: 'wikipedia-status', class: 'runbar-status', role: 'status', hidden: true });
-  document.querySelector('#runbar-wikipedia').replaceChildren(runBtn, saveBtn, againBtn, pathBtn, stopBtn, statusEl);
+  document.querySelector('#runbar-wikipedia').replaceChildren(runBtn, saveBtn, exportBtn, againBtn, pathBtn, stopBtn, statusEl);
+
+  /** Every request this run sent to Jev, and the response it got back, exactly as they were — for debugging outside the app. */
+  function exportLog() {
+    if (!progress?.log?.length) return;
+    const payload = { question: slice.question.trim(), status: progress.status, requests: progress.requests, tokens: progress.tokens, ms: progress.ms, log: progress.log };
+    downloadText(`jev-wikipedia-log-${fileStamp()}.json`, JSON.stringify(payload, null, 2), 'application/json');
+  }
 
   const isSaved = (answer) => slice.saved.some((s) => s.question === slice.question.trim() && s.url === answer.url && s.text === answer.text);
   const finished = () => !running && (progress != null || failure !== '');
@@ -229,7 +242,12 @@ export function initWikipedia() {
     const found = !running && progress?.status === 'found';
     saveBtn.disabled = !found || isSaved(progress.answer);
     saveBtn.textContent = found && isSaved(progress.answer) ? 'Saved' : 'Save answer';
-    againBtn.hidden = pathBtn.hidden = !finished();
+    exportBtn.disabled = !progress?.log?.length;
+    // A false premise or an unanswerable question stopped before any article or search term was tried, so "a different
+    // path" (which only avoids those) would not change anything.
+    const gated = progress?.status === 'false-premise' || progress?.status === 'unanswerable';
+    againBtn.hidden = !finished();
+    pathBtn.hidden = !finished() || gated;
     againBtn.disabled = pathBtn.disabled = blank;
     stopBtn.hidden = !running;
   }
@@ -240,6 +258,8 @@ export function initWikipedia() {
     if (p.status === 'running') return `Asking Jev: request ${p.requests}${limit == null ? '' : ` of ${limit}`}`;
     if (p.status === 'found') return `Found, with ${asked} to Jev.`;
     if (p.status === 'stopped') return `Stopped after ${asked} to Jev.`;
+    if (p.status === 'false-premise') return `False premise, with ${asked} to Jev.`;
+    if (p.status === 'unanswerable') return `Unanswerable, with ${asked} to Jev.`;
     return `Not found, after ${asked} to Jev.`;
   };
 
@@ -329,11 +349,21 @@ export function initWikipedia() {
     );
   }
 
+  // What each terminal non-"found" status is headed with, and the hint under it: a false premise or an unanswerable
+  // question stopped before any search was made, so "try a different path" (which avoids articles and search terms
+  // already tried) would make no difference, and is left out for those two.
+  const GATED_HEADINGS = {
+    'not-found': ['Not found. ', 'The steps below show which one went wrong. Try again, try a different path, or change the settings and ask again.'],
+    'false-premise': ['False premise. ', 'The steps below show what Jev thought was false. Try rephrasing the question if this was not what you meant.'],
+    unanswerable: ['Unanswerable. ', "The steps below show what Jev saw. Try rephrasing the question if it wasn't meant to be read this way."],
+  };
+
   function notFoundCard(p) {
+    const [heading, hint] = GATED_HEADINGS[p.status] ?? GATED_HEADINGS['not-found'];
     return h(
       'div',
       { class: 'wiki-notfound' },
-      h('p', {}, h('strong', {}, 'Not found. '), p.reason),
+      h('p', {}, h('strong', {}, heading), p.reason),
       p.best
         ? [
             h('p', { class: 'small muted' }, `The closest text Jev saw, which it is only ${pct(p.best.checked)} sure answers the question (it needs ${pct(slice.settings.accept / 100)}):`),
@@ -341,7 +371,7 @@ export function initWikipedia() {
             h('p', { class: 'wiki-source small' }, 'From ', sourceLink(p.best)),
           ]
         : null,
-      h('p', { class: 'hint' }, 'The steps below show which one went wrong. Try again, try a different path, or change the settings and ask again.'),
+      h('p', { class: 'hint' }, hint),
     );
   }
 
@@ -353,7 +383,7 @@ export function initWikipedia() {
     else if (p) {
       if (p.quick) parts.push(quickCard(p));
       if (p.status === 'running') parts.push(h('p', { class: 'muted small' }, 'Looking…'));
-      if (p.status === 'not-found') parts.push(notFoundCard(p));
+      if (p.status === 'not-found' || p.status === 'false-premise' || p.status === 'unanswerable') parts.push(notFoundCard(p));
       if (p.status === 'stopped') parts.push(h('p', { class: 'notice' }, 'Stopped. The steps below show how far it got.'));
     }
     if (parts.length === 0) parts.push(h('p', { class: 'muted' }, 'Ask a question and the answer appears here, with the page it came from.'));
@@ -367,7 +397,10 @@ export function initWikipedia() {
     }
     const stats = { requests: progress.requests, tokens: progress.tokens, ms: progress.ms, articles: progress.read.length, terms: progress.searched };
     const pending = running ? (progress.requests ? `Asking Jev (request ${progress.requests}${slice.settings.requests == null ? '' : ` of ${slice.settings.requests}`})…` : 'Starting…') : '';
-    $('trail').replaceChildren(statsView(stats, { checked: progress.answer?.checked ?? null, requestLimit: slice.settings.requests }), stepsView(progress.trail, { chosenText: progress.answer?.text ?? '', pending, open: openSteps, onToggle: (index, open) => (open ? openSteps.add(index) : openSteps.delete(index)) }));
+    $('trail').replaceChildren(
+      statsView(stats, { checked: progress.answer?.checked ?? null, requestLimit: slice.settings.requests }),
+      stepsView(progress.trail, { chosenText: progress.answer?.text ?? '', pending, open: openSteps, onToggle: (index, open) => (open ? openSteps.add(index) : openSteps.delete(index)), openInSingle }),
+    );
   }
 
   function render() {
