@@ -57,6 +57,13 @@ function trackBars() {
 /* ---------- pages ---------- */
 
 function setMode(mode) {
+  // A set saved from Batch has no single-context page of its own to run on (its questions are meant to run against
+  // many rows, not one pasted block of context) — opening one edits it on Batch instead, the same as "Edit in Batch"
+  // already does, rather than showing it on the single-context set page as if it were any other set.
+  if (isSetMode(mode)) {
+    const set = app.sets.find((s) => s.id === setIdOf(mode));
+    if (set && editPageOf(set) === 'batch') return editSet(set.id);
+  }
   const known = isSetMode(mode)
     ? app.sets.some((s) => s.id === setIdOf(mode))
     : isSteamSavedMode(mode)
