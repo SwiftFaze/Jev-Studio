@@ -174,8 +174,13 @@ export async function findAnswer(question, { search, article, run, signal, onPro
     return reply?.answers ?? {};
   };
 
-  /** Steps 3 to 5 on one article: the parts in order, each tried until an answer passes the check. */
-  async function readArticle(data, entry) {
+  /**
+   * Steps 3 to 5 on one article: the parts in order, each tried until an answer passes the check. `meaning` is step
+   * 0's own answer to "what is `question` asking for?" (its description), when it already ran; that lets step 3
+   * (which part) use it too, not just step 4. When it hasn't (`classify: false`), it is asked here instead, bundled
+   * with which part — which means it can only inform step 4, since by the time it comes back the part is already chosen.
+   */
+  async function readArticle(data, entry, meaning) {
     const parts = articleParts(data);
     if (parts.length === 0) {
       entry.skipped = 'There is nothing on that page to read.';
@@ -183,10 +188,15 @@ export async function findAnswer(question, { search, article, run, signal, onPro
     }
 
     const options = meaningOptions(question);
-    const partRequest = buildPartRequest(question, data.title, parts);
+    const partRequest = buildPartRequest(question, data.title, parts, meaning);
     const answers = await ask(partRequest);
     const partRank = readChoice(answers.part, parts, 'p');
-    const meaning = readMeaning(answers.meaning, options);
+    const ownMeaning = meaning ? null : readMeaning(answers.meaning, options);
+    // What step 4 (and, when known this early, step 3) folds into its own instructions ("...which is asking for an
+    // explanation or a description?"), so the candidate has to match the kind of thing being asked for, not just the
+    // topic. Left out for "Something else": that option exists precisely for "not sure", so it isn't asserted as if
+    // it were an answer.
+    const topMeaning = meaning ?? (ownMeaning[0].label === 'other' ? null : options[ownMeaning[0].label]);
 
     const { tries, belowFloor, overCount } = worthTrying(partRank.ranked, max.parts, at.tryAt);
     if (belowFloor) left.floor = true;
@@ -209,16 +219,21 @@ export async function findAnswer(question, { search, article, run, signal, onPro
               chosen: `p${pick.index}`,
               options: choiceOptions(partRank.ranked, (r) => ({ key: `p${r.index}`, label: r.item.label }), partRank.none),
               confidence: confidenceOf(answers.part),
-              meaning: {
-                label: meaning[0].label,
-                p: meaning[0].p,
-                others: meaning.slice(1).filter((m) => m.p > 0),
-                instructions: partRequest.questions.meaning.instructions,
-                state: partRequest.state,
-                chosen: meaning[0].label,
-                options: meaning.map((m) => ({ key: m.label, label: options[m.label], p: m.p })),
-                confidence: confidenceOf(answers.meaning),
-              },
+              // Only here when step 0 didn't already settle it (see the `meaning` step of the trail for that case).
+              ...(ownMeaning
+                ? {
+                    meaning: {
+                      label: ownMeaning[0].label,
+                      p: ownMeaning[0].p,
+                      others: ownMeaning.slice(1).filter((m) => m.p > 0),
+                      instructions: partRequest.questions.meaning.instructions,
+                      state: partRequest.state,
+                      chosen: ownMeaning[0].label,
+                      options: ownMeaning.map((m) => ({ key: m.label, label: options[m.label], p: m.p })),
+                      confidence: confidenceOf(answers.meaning),
+                    },
+                  }
+                : {}),
             }
           : {}),
       });
@@ -230,7 +245,7 @@ export async function findAnswer(question, { search, article, run, signal, onPro
         continue;
       }
 
-      const { request, chunks } = buildAnswerRequest(question, data.title, part.label, candidates);
+      const { request, chunks } = buildAnswerRequest(question, data.title, part.label, candidates, topMeaning);
       const reply = await ask(request);
       const ranked = readAnswerChunks(reply, chunks);
       const top = ranked[0];
@@ -321,7 +336,7 @@ export async function findAnswer(question, { search, article, run, signal, onPro
   async function classifyQuestion() {
     const request = buildClassifyRequest(question);
     const answers = await ask(request);
-    const result = readClassify(answers);
+    const result = readClassify(answers, question);
     const top = result.ranked[0];
     add({
       id: 'classify',
@@ -343,7 +358,28 @@ export async function findAnswer(question, { search, article, run, signal, onPro
       instructions: `${request.questions.falsePremise.instructions} ${request.questions.unanswerable.instructions}`,
       state: request.state,
     });
-    return { top: top.key, confidence: top.p, falsePremise: result.falsePremise, unanswerable: result.unanswerable };
+    const topMeaning = result.meaning[0];
+    add({
+      id: 'meaning',
+      title: 'What it asks for',
+      label: result.meaningOptions[topMeaning.label],
+      p: topMeaning.p,
+      others: result.meaning.slice(1).filter((m) => m.p > 0).map((m) => ({ label: result.meaningOptions[m.label], p: m.p })),
+      instructions: request.questions.meaning.instructions,
+      state: request.state,
+      chosen: topMeaning.label,
+      options: result.meaning.map((m) => ({ key: m.label, label: result.meaningOptions[m.label], p: m.p })),
+      confidence: confidenceOf(answers.meaning),
+    });
+    return {
+      top: top.key,
+      confidence: top.p,
+      falsePremise: result.falsePremise,
+      unanswerable: result.unanswerable,
+      // Passed to `readArticle` for steps 3 and 4; "Something else" exists precisely for "not sure", so it isn't
+      // asserted as if it were an answer.
+      meaning: topMeaning.label === 'other' ? null : result.meaningOptions[topMeaning.label],
+    };
   }
 
   /** Run `findAnswer` again, for a sub-question, sharing this run's budget and network functions. Throws `Stopped` if the sub-run was aborted. */
@@ -519,8 +555,10 @@ export async function findAnswer(question, { search, article, run, signal, onPro
 
   try {
     let handled = false;
+    let stepMeaning = null; // step 0's "what does it ask for?", passed to readArticle so step 3 can use it too, not just step 4
     if (classify) {
       const cls = await classifyQuestion();
+      stepMeaning = cls.meaning;
       if (cls.unanswerable >= at.unanswerable) {
         state.status = 'unanswerable';
         state.reason = 'Jev is confident this question lacks a coherent, answerable structure, so no search was made.';
@@ -656,7 +694,7 @@ export async function findAnswer(question, { search, article, run, signal, onPro
           continue;
         }
 
-        await readArticle(data, entry);
+        await readArticle(data, entry, stepMeaning);
         if (state.answer) return;
       }
     }

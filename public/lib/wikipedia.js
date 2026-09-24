@@ -586,8 +586,11 @@ export const QUESTION_TYPE_CRITERIA = {
 };
 
 /**
- * Step 0: what kind of question this is, plus two gates, all in one request (so it costs one call to Jev, not three):
- * a Choice across `QUESTION_TYPE_CRITERIA` (verbatim, tuned criteria), and a Yes / No for each gate.
+ * Step 0: what kind of question this is, two gates, and what the question is asking for (`meaningOptions`) — all in
+ * one request (so it costs one call to Jev, not four): a Choice across `QUESTION_TYPE_CRITERIA` (verbatim, tuned
+ * criteria), a Yes / No for each gate, and the "what does it ask for" Choice that used to be asked again for every
+ * article tried (it only depends on `question`, never on the article), and too late to help choose the right part of
+ * one (step 3) — only the sentence within it (step 4). Settling it here, before any article is opened, lets both use it.
  */
 export function buildClassifyRequest(question) {
   return {
@@ -604,17 +607,28 @@ export function buildClassifyRequest(question) {
         instructions:
           'Is `question` unanswerable because it lacks a coherent grammatical structure or a discernible request, even if individual words in it are topical or otherwise meaningful in isolation?',
       },
+      meaning: { type: 'choice', instructions: 'What is `question` asking for?', criteria: meaningOptions(question) },
     },
   };
 }
 
-/** Step 0's Choice, ranked best first (every type listed), and the two gates as probabilities from 0 to 1. */
-export function readClassify(answers) {
+/**
+ * Step 0's Choice, ranked best first (every type listed), the two gates as probabilities from 0 to 1, and the meaning
+ * Choice, ranked the same way `readMeaning` does (with its own options, to look up a ranked key's description).
+ */
+export function readClassify(answers, question) {
   const probs = answers?.type?.probabilities ?? (answers?.type?.choice ? { [answers.type.choice]: 1 } : {});
   const ranked = Object.keys(QUESTION_TYPE_CRITERIA)
     .map((key) => ({ key, p: Number(probs[key]) || 0 }))
     .sort((a, b) => b.p - a.p);
-  return { ranked, falsePremise: readYesNo(answers?.falsePremise), unanswerable: readYesNo(answers?.unanswerable) };
+  const meaningOpts = meaningOptions(question);
+  return {
+    ranked,
+    falsePremise: readYesNo(answers?.falsePremise),
+    unanswerable: readYesNo(answers?.unanswerable),
+    meaning: readMeaning(answers?.meaning, meaningOpts),
+    meaningOptions: meaningOpts,
+  };
 }
 
 /* ---------- multi-entity splitting (Multi-Part and Comparison) ---------- */
@@ -746,33 +760,50 @@ export function buildArticleRequest(question, results, { snippets = true } = {})
   return { state: { question }, questions };
 }
 
-/** Step 3: which part of the article, and (in the same request) what the question means. Options are `p0`…, and `none`. */
-export function buildPartRequest(question, title, parts) {
+/**
+ * Step 3: which part of the article. `meaning` is step 0's own answer to "what is `question` asking for?" (its
+ * description) — when given, it is folded into the instructions, the same way `buildAnswerRequest` does, so an
+ * infobox of raw facts isn't picked for a question asking for an explanation, and vice versa; that question is left
+ * out of this request, since it was already asked once, up front, rather than asked again for every article tried.
+ * When not given (`classify: false`), "what the question means" is asked here instead, in the same request — but
+ * only found out after the part is already chosen, too late to inform this choice, only the next one.
+ */
+export function buildPartRequest(question, title, parts, meaning) {
+  const questions = {
+    part: {
+      type: 'choice',
+      instructions: meaning
+        ? `Which part of the article \`article\` is most likely to state the answer to \`question\`, which is asking for ${lowerFirst(meaning)}?`
+        : 'Which part of the article `article` is most likely to state the answer to `question`?',
+      criteria: { ...indexKeys('p', parts, (p) => p.description), none: 'None of these parts is likely to state it' },
+    },
+  };
+  if (!meaning) questions.meaning = { type: 'choice', instructions: 'What is `question` asking for?', criteria: meaningOptions(question) };
   return {
     state: { question, article: title },
-    questions: {
-      part: {
-        type: 'choice',
-        instructions: 'Which part of the article `article` is most likely to state the answer to `question`?',
-        criteria: { ...indexKeys('p', parts, (p) => p.description), none: 'None of these parts is likely to state it' },
-      },
-      meaning: { type: 'choice', instructions: 'What is `question` asking for?', criteria: meaningOptions(question) },
-    },
+    questions,
   };
 }
 
+const lowerFirst = (s) => s.charAt(0).toLowerCase() + s.slice(1);
+
 /**
  * Step 4: which candidate states the answer. A part with more than 250 candidates is cut into chunks, one Choice each
- * (`answer0`, `answer1`, …) in the same request, and each has its own `none`. Returns the request and the chunks.
+ * (`answer0`, `answer1`, …) in the same request, and each has its own `none`. `meaning` is step 3's own answer to
+ * "what is `question` asking for?" (its description, e.g. "An explanation or a description") — when given, it is
+ * folded into the instructions, so the candidate has to match not just the topic but the kind of thing being asked
+ * for. Left out (or the catch-all "Something else") when step 3 wasn't sure, rather than guessing. Returns the
+ * request and the chunks.
  */
-export function buildAnswerRequest(question, title, partLabel, candidates) {
+export function buildAnswerRequest(question, title, partLabel, candidates, meaning) {
   const chunks = [];
   for (let i = 0; i < candidates.length && chunks.length < MAX_CHUNKS; i += MAX_CHOICES) chunks.push(candidates.slice(i, i + MAX_CHOICES));
   const questions = {};
+  const asks = meaning ? `states the answer to \`question\`, which is asking for ${lowerFirst(meaning)}` : 'states the answer to `question`';
   chunks.forEach((chunk, c) => {
     questions[`answer${c}`] = {
       type: 'choice',
-      instructions: 'Which of these sentences, from the part `part` of the article `article`, states the answer to `question`?',
+      instructions: `Which of these sentences, from the part \`part\` of the article \`article\`, ${asks}?`,
       criteria: { ...indexKeys('c', chunk, (cand) => cand.text), none: 'None of these states the answer' },
     };
   });
@@ -864,7 +895,7 @@ export function readMeaning(answer, options) {
 export const MAX_SAVED = 50;
 export const MAX_SAVED_OPTIONS = 300; // options kept for a step of a saved answer: more than a step ever has (a part has at most 250 sentences a Choice, and 4 Choices)
 
-const STEP_IDS = new Set(['term', 'article', 'part', 'answer', 'check', 'refine', 'classify', 'gate', 'subquestion', 'compare', 'negation']);
+const STEP_IDS = new Set(['term', 'article', 'part', 'answer', 'check', 'refine', 'classify', 'gate', 'meaning', 'subquestion', 'compare', 'negation']);
 const text = (v, max = 500) => (typeof v === 'string' ? v.slice(0, max) : '');
 const chance = (v) => (Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 0);
 const count = (v) => (Number.isFinite(v) && v >= 0 ? Math.round(v) : 0);

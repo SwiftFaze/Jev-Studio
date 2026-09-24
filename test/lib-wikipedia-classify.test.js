@@ -79,6 +79,45 @@ test('classification runs as step 0, then a Direct-Fact question goes through th
   assert.deepEqual(jev.ids().slice(0, 3), ['type', 'falsePremise', 'unanswerable'], 'one request for step 0, before the term step');
 });
 
+test('step 0\'s "what does it ask for" steers which PART is chosen, not just which sentence: an infobox of raw facts loses to the Lead for a "what is X" question', async () => {
+  // The exact shape of the bug report this fixes: an infobox of unrelated facts (Developer, Type, ...) with no
+  // explanation of what the subject actually is, and a Lead that has one.
+  const article = {
+    title: 'Jev (AI model)',
+    disambiguation: false,
+    infobox: [
+      { label: 'Developer', value: 'TypeSafe AI' },
+      { label: 'Type', value: 'Artificial intelligence model' },
+    ],
+    sections: [{ path: 'Lead', anchor: '', sentences: ['Jev is TypeSafe’s AI model for turning natural language into typed judgments.'] }],
+  };
+  let partRequestSeen = null;
+  const jev = fakeJev({
+    ...classifyAs('direct-fact', { meaning: () => ({ explanation: 0.7, fact: 0.2 }) }),
+    falsePremise: 0.02,
+    unanswerable: 0.02,
+    article: () => ({ a0: 0.9 }),
+    part: (q, request) => {
+      partRequestSeen = request;
+      return { p1: 0.9 }; // the Lead (p1), now that the request itself says what kind of thing is being asked for
+    },
+    answer0: () => ({ c0: 0.9 }),
+    answers: 0.9,
+  });
+  const result = await findAnswer('what is jev ai typesafe', {
+    search: async () => ({ results: [{ title: 'Jev (AI model)', snippet: 'x' }] }),
+    article: async () => article,
+    run: jev.run,
+    classify: true,
+  });
+  assert.equal(result.status, 'found');
+  assert.match(result.answer.text, /turning natural language/, 'the Lead was picked, not an infobox row');
+  assert.match(partRequestSeen.questions.part.instructions, /which is asking for an explanation or a description\?$/);
+  assert.equal('meaning' in partRequestSeen.questions, false, 'settled once in step 0, not asked again for this (or any other) article');
+  assert.equal(result.trail.filter((s) => s.id === 'meaning').length, 1, '"what it asks for" appears once, as its own step 0 entry');
+  assert.equal(result.trail.find((s) => s.id === 'part').meaning, undefined, 'no longer duplicated nested under the part step');
+});
+
 test('classify: false (the default in the rest of the test suite) skips step 0 entirely', async () => {
   const jev = fakeJev(singleEntity());
   const result = await findAnswer('Who was the first person on the Moon?', {

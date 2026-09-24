@@ -7,7 +7,7 @@ import { answerCard, pct } from '../results.js';
 
 // classify/gate are step 0 (per the plan); refine was missing here before (a pre-existing gap, fixed in passing); the
 // Multi-Part/Comparison/Negation steps get their own numbers rather than reusing 1-5's single-entity meaning.
-const STEP_NUMBERS = { classify: 0, gate: 0, term: 1, article: 2, part: 3, answer: 4, check: 5, refine: 6, subquestion: 1, compare: 2, negation: 4 };
+const STEP_NUMBERS = { classify: 0, gate: 0, meaning: 0, term: 1, article: 2, part: 3, answer: 4, check: 5, refine: 6, subquestion: 1, compare: 2, negation: 4 };
 const QUOTED = new Set(['term', 'answer']); // a step whose pick is text taken from somewhere, shown in quotes
 const clip = (text, max) => (text.length > max ? `${text.slice(0, max - 1).trimEnd()}…` : text);
 const number = (n) => n.toLocaleString('en-US');

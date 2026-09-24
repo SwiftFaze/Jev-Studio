@@ -221,6 +221,14 @@ test('the part request lists the infobox with its row labels, then the sections,
   assert.deepEqual(request.state, { question: 'How big is Paris?', article: 'Paris' });
 });
 
+test('given step 0\'s meaning, the part request folds it into the instructions and does not ask it again', () => {
+  const parts = articleParts(parisArticle());
+  const request = buildPartRequest('How big is Paris?', 'Paris', parts, 'Its land area');
+  OK(request, 'part with meaning');
+  assert.equal(request.questions.part.instructions, 'Which part of the article `article` is most likely to state the answer to `question`, which is asking for its land area?');
+  assert.equal('meaning' in request.questions, false, 'not asked again: step 0 already answered it, once, for every article');
+});
+
 test('an article with no infobox has no Infobox part, and a very long article is cut to what a Choice allows', () => {
   const noBox = articleParts({ title: 'X', infobox: [], sections: [{ path: 'Lead', anchor: '', sentences: ['One.'] }] });
   assert.deepEqual(noBox.map((p) => p.label), ['Lead']);
@@ -258,6 +266,19 @@ test('the answer request keeps to 250 options a Choice, in chunks, each with its
   OK(one.request, 'one candidate and a none is still a Choice');
   const enormous = buildAnswerRequest('q', 'Paris', 'Lead', Array.from({ length: 5000 }, () => candidates[0]));
   assert.equal(enormous.chunks.length, 4, 'a part is cut off after four chunks');
+});
+
+test('the answer request folds step 3\'s "what is it asking for" into its own instructions, when given', () => {
+  const candidates = [{ text: 'Sentence.', before: '', after: '' }];
+  const plain = buildAnswerRequest('q', 'Paris', 'History', candidates);
+  assert.equal(plain.request.questions.answer0.instructions, 'Which of these sentences, from the part `part` of the article `article`, states the answer to `question`?');
+
+  const withMeaning = buildAnswerRequest('q', 'Paris', 'History', candidates, 'An explanation or a description');
+  OK(withMeaning.request, 'answer request with meaning');
+  assert.equal(
+    withMeaning.request.questions.answer0.instructions,
+    'Which of these sentences, from the part `part` of the article `article`, states the answer to `question`, which is asking for an explanation or a description?',
+  );
 });
 
 test('readAnswerChunks puts every candidate in one list, best first, each with its chunk\'s none', () => {
