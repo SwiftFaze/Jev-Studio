@@ -45,14 +45,14 @@ export function openSaveSet() {
   const count = questions ? Object.keys(questions).length : 0;
   // Questions that came from a set (Edit in Single or Batch) or were saved before are linked to it, so its details are prefilled.
   const linked = app.sets.find((s) => s.id === draft.setId);
-  // What the set's own page will be, which is what the description is for: a set saved from Batch opens read-only,
-  // with no context box to describe (see setview.js); every other one opens on a page that runs it on pasted text.
+  // What the set's own page will be, which is what the description is for: a set saved from Batch gets an items box
+  // and runs each line on its own (see setbatch.js); every other one gets one context box for one run.
   const fromBatch = currentPage() === 'batch';
   const COPY = fromBatch
     ? {
-        lede: `Saves the questions on this page (${plural(count, 'question')}) as a question set. It becomes a page in the side menu that shows these questions, and opens them in Batch when you want to run them.`,
-        descriptionLabel: "Description (optional): shown on the set's page, above the questions",
-        descriptionHint: 'What are these questions for? For example: Each row is one support ticket; they are triaged by team and urgency.',
+        lede: `Saves the questions on this page (${plural(count, 'question')}) as a question set. It becomes a page in the side menu with its own items box: paste or import them there and each is judged against these questions, without touching this page.`,
+        descriptionLabel: "Description (optional): shown on the set's page, above the items box",
+        descriptionHint: 'What should be pasted there, one per line? For example: One support ticket per line; each is triaged by team and urgency.',
       }
     : {
         lede: `Saves the questions on this page (${plural(count, 'question')}) as a question set. Each set becomes a page in the side menu, with a context box for whatever you paste.`,

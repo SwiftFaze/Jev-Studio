@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { lintQuestion } from '../public/lib/lint.js';
 import { compareRuns } from '../public/lib/compare.js';
-import { describeQuestions, EDIT_PAGE_LABEL, editPageOf, exportSet, isViewOnly, parseSetFile, QUESTION_TYPE_LABEL, removeSet, SET_FORMAT, upsertSet } from '../public/lib/library.js';
+import { EDIT_PAGE_LABEL, editPageOf, exportSet, isBatchSet, parseSetFile, removeSet, SET_FORMAT, upsertSet } from '../public/lib/library.js';
 import { batchCsvRows, resultsToText } from '../public/lib/export.js';
 import { buildRankState, rankQuestions, rankSpecs } from '../public/lib/rank.js';
 import { addUsage, emptyUsage, formatTokens } from '../public/lib/usage.js';
@@ -177,45 +177,12 @@ test('a set saved from Batch is edited in Batch; every other set, and imported o
   assert.equal('origin' in exportSet('Tickets', goodQuestions(), ''), false);
 });
 
-test('a set saved from Batch is the one that opens read-only; every other set opens on a page that runs it', () => {
+test('a set saved from Batch is the one that runs its questions over many items; every other set runs them over one context', () => {
   const fromBatch = upsertSet([], 'Tickets', goodQuestions(), { origin: 'batch', now: 1000 })[0];
-  assert.equal(isViewOnly(fromBatch), true);
+  assert.equal(isBatchSet(fromBatch), true);
   for (const other of [upsertSet([], 'Other', goodQuestions(), { now: 1000 })[0], undefined, null]) {
-    assert.equal(isViewOnly(other), false, String(other?.name));
+    assert.equal(isBatchSet(other), false, String(other?.name));
   }
-});
-
-test('describeQuestions draws a set as it is saved: the id, the type and whatever that type carries', () => {
-  const described = describeQuestions(goodQuestions());
-  assert.deepEqual(described.map((d) => d.id), ['dept', 'urgent', 'mood'], 'the set\'s own order is kept');
-  assert.deepEqual(described.map((d) => d.label), [QUESTION_TYPE_LABEL.choice, QUESTION_TYPE_LABEL.noul, QUESTION_TYPE_LABEL.score]);
-
-  const [dept, urgent, mood] = described;
-  assert.equal(dept.instructions, 'Team?');
-  assert.deepEqual(dept.options, [{ key: 'billing', desc: 'Payments' }, { key: 'tech', desc: '' }], 'an option with no description shows as just its key');
-  assert.deepEqual(dept.levels, []);
-  assert.deepEqual(urgent.options, [{ key: 'true', desc: 'yes' }, { key: 'false', desc: 'no' }], 'true before false, whatever order they were written in');
-  assert.deepEqual(mood.levels, ['calm', 'angry'], 'levels stay in order, lowest first');
-  assert.deepEqual(mood.options, []);
-});
-
-test('describeQuestions describes a malformed question as far as it goes: showing a set must never be what fails', () => {
-  const described = describeQuestions({
-    noType: { instructions: 'Still worth showing' },
-    noText: { type: 'noul' },
-    badChoice: { type: 'choice', instructions: 'Which?', criteria: { a: 'A', b: 7 } },
-    badScore: { type: 'score', instructions: 'How much?', criteria: ['low', 5, 'high'] },
-    plainYesNo: { type: 'noul', instructions: 'Urgent?' },
-  });
-  assert.deepEqual(described.map((d) => d.id), ['noType', 'noText', 'badChoice', 'badScore', 'plainYesNo']);
-  assert.equal(described[0].type, null);
-  assert.equal(described[0].label, 'Unknown type');
-  assert.equal(described[1].instructions, '', 'no text is empty text, not undefined');
-  assert.deepEqual(described[2].options, [{ key: 'a', desc: 'A' }, { key: 'b', desc: '' }], 'a description that is not text is dropped, the option is not');
-  assert.deepEqual(described[3].levels, ['low', 'high'], 'a level that is not text is left out');
-  assert.deepEqual(described[4].options, [], 'a yes / no usually has no criteria at all, and shows none');
-
-  for (const nothing of [null, undefined, [], 'a string', 7]) assert.deepEqual(describeQuestions(nothing), [], String(nothing));
 });
 
 /* ---------- export ---------- */

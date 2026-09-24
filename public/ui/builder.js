@@ -2,15 +2,13 @@ import { h } from '../dom.js';
 import { app, PAGE_TYPE, save } from './state.js';
 import { duplicateQuestion, newQuestion } from '../request.js';
 import { lintQuestion } from '../lib/lint.js';
-import { QUESTION_TYPE_LABEL } from '../lib/library.js';
 
 const $ = (selector) => document.querySelector(selector);
 
-// The labels come from the library, so the builder and a saved set's read-only view never name a type differently.
 export const TYPE_META = {
-  choice: { label: QUESTION_TYPE_LABEL.choice, help: 'Pick exactly one option.', placeholder: 'Which team should handle this?' },
-  noul: { label: QUESTION_TYPE_LABEL.noul, help: 'How likely is a statement to be true?', placeholder: 'Does this convey urgency?' },
-  score: { label: QUESTION_TYPE_LABEL.score, help: 'Rate along an ordered scale, lowest level first.', placeholder: 'How frustrated is the customer?' },
+  choice: { label: 'Choice', help: 'Pick exactly one option.', placeholder: 'Which team should handle this?' },
+  noul: { label: 'Yes / No', help: 'How likely is a statement to be true?', placeholder: 'Does this convey urgency?' },
+  score: { label: 'Score', help: 'Rate along an ordered scale, lowest level first.', placeholder: 'How frustrated is the customer?' },
 };
 
 // The builder edits one draft at a time: Single's, Batch's, or one of the typed pages'.
