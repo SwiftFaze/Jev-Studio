@@ -16,9 +16,19 @@ const number = (n) => n.toLocaleString('en-US');
 export const sourceLink = (answer) =>
   h('a', { href: answer.url, target: '_blank', rel: 'noopener noreferrer' }, answer.part && answer.part !== 'Lead' ? `${answer.title} › ${answer.part}` : answer.title);
 
-/** The answer, and only the answer: the quote, and where it is from. */
+/**
+ * The answer, and where it is from. When the answer is a row that was refined to one piece of it (see step 6 in
+ * `findAnswer`), that piece is shown as the answer, with the row it came from underneath for context — the same
+ * split the export report uses.
+ */
 export function answerBlock(answer) {
-  return h('div', { class: 'wiki-answer is-found' }, h('blockquote', { class: 'wiki-quote' }, answer.text), h('p', { class: 'wiki-source small' }, 'From ', sourceLink(answer)));
+  return h(
+    'div',
+    { class: 'wiki-answer is-found' },
+    h('blockquote', { class: 'wiki-quote' }, answer.refined || answer.text),
+    answer.refined ? h('p', { class: 'wiki-refined-from small muted' }, 'From the row: ', answer.text) : null,
+    h('p', { class: 'wiki-source small' }, 'From ', sourceLink(answer)),
+  );
 }
 
 /* ---------- what it cost ---------- */

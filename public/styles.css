@@ -613,6 +613,7 @@ dialog[open] { display: flex; flex-direction: column; gap: 10px; }
 .wiki-quote { margin: 0; padding: 2px 0 2px 12px; border-left: 3px solid var(--accent); font-size: 16px; line-height: 1.5; overflow-wrap: anywhere; }
 .wiki-source { margin: 0; color: var(--muted); }
 .wiki-source a { color: var(--accent); }
+.wiki-refined-from { margin: 0; }
 
 /* How Jev got there: what the run cost, then each step as the same card the Single page draws. */
 .wiki-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px; }
