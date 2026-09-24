@@ -612,7 +612,7 @@ test('a step Jev was asked carries what the trail needs to draw the same card as
   assert.match(answer.options[0].key, /^#\d+$/, 'a sentence is numbered by its place in the part');
   assert.match(answer.options[0].label, /^Area: /);
   assert.equal(answer.options.at(-1).key, 'none');
-  assert.match(check.instructions, /state the answer to/);
+  assert.match(check.instructions, /is `sentence` the thing/);
   assert.match(check.state.sentence, /^Area: /);
   assert.deepEqual(Object.keys(check.state).sort(), ['about', 'article', 'part', 'question', 'sentence']);
 });
@@ -730,12 +730,15 @@ test('how many rows of a part are checked is limited, and a row Jev gave under t
   assert.ok(all.requests.filter((r) => 'answers' in r.questions).length >= 3, 'with no floor and no limit every row is checked');
 });
 
-test('the final check asks for every detail of the question to match, not only for an answer of the right kind', async () => {
+test('the final check grounds the candidate in the part it came from, and asks whether it is what the question asks for', async () => {
   const jev = fakeJev();
   await findAnswer(QUESTION, { ...fakeWorld(), run: jev.run });
   const check = jev.requests.find((r) => 'answers' in r.questions);
-  assert.match(check.questions.answers.instructions, /exactly what the question specifies/);
-  assert.match(check.questions.answers.instructions, /model, engine, year or place/);
+  // A row names no subject of its own, so the check is told which article's subject it is about.
+  assert.match(check.questions.answers.instructions, /from the part "Infobox" of the article "Paris"/);
+  // What the question asks for, written out — not which of the question's details the row repeats.
+  assert.ok(check.questions.answers.instructions.includes(`the thing "${QUESTION}" asks for`));
+  assert.match(check.questions.answers.instructions, /a different fact about the same subject/);
 });
 
 test('a row that passes the check is cut into its pieces, and Jev picks the one that is the answer', async () => {

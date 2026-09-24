@@ -47,7 +47,7 @@ mock mode and the token counter all work unchanged.
 | 2. Article | `/api/wikipedia/search` with the chosen term (and the runner-up when the choice is under 60% sure), merged and deduplicated, `(disambiguation)` titles dropped | **Choice** `article` over *title + snippet*, plus `none`. Asked in the same request: a **Yes / No** per snippet, "Does this snippet state the answer?" |
 | 3. Part | `/api/wikipedia/article` returns the infobox rows and the sections as sentences | **Choice** `part` over `Infobox` + section paths ("Geography › Climate") + `none`. Asked in the same request: **Choice** `meaning`, "Which sense of the question is meant?", with options built from the question type (for "how big": area, population, both, other) |
 | 4. Answer | Candidates: the infobox rows, or the sentences of the chosen section. Each is cut to 400 characters, with at most 250 per Choice (the limit is 255); longer sections are split into chunks. | **Choice** `answer` over the candidates + `none` |
-| 5. Check | The chosen candidate with the sentence either side of it | **Yes / No** `answers`: "Does this text state the answer to the question, rather than just mention the subject?" |
+| 5. Check | The chosen candidate with the sentence either side of it | **Yes / No** `answers`: "This text is from part P of article A, so its subject is that article's subject — is it the thing the question asks for, rather than a different fact about the same subject?" |
 
 **When the answer is found:** `answers` ≥ 0.6 and `answer` ≠ `none`. Show the quote, the link
 (`https://en.wikipedia.org/wiki/<Title>#<Anchor>`) and the trail. The threshold is a starting point, to be tuned on

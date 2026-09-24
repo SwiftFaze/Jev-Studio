@@ -122,7 +122,7 @@ const aboutFor = (data, part) => (part.label === 'Lead' ? null : leadExcerpt(dat
  * recognised pattern, rather than guessing.
  *
  * The single-entity pipeline is (1) which search term, (2) which article, (3) which part of it, (4) which sentence,
- * and (5) a Yes / No on that sentence, which must be for exactly what the question specifies. When it fails, the steps go
+ * and (5) a Yes / No on that sentence, which must be the thing the question asks for, not another fact about the same subject. When it fails, the steps go
  * back without asking Jev again where they can: the next best sentence or row of the same part, then the next part, then the next article.
  * (6) When the answer is a row (of a table, or of the infobox), it is cut into its pieces and Jev picks the one piece that is the answer. When the articles of a search are used up, a different
  * path is tried: the next search term, with its own results. It stops when the answer is found, or a limit is reached.

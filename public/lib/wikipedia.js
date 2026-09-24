@@ -853,6 +853,18 @@ export function buildAnswerRequest(question, title, partLabel, candidates, meani
  * Step 5: a Yes / No on the chosen candidate, with the sentence either side so it is read in context. `about` (see
  * `leadExcerpt`) is the same grounding step 4 got, for a candidate — an infobox or table row — with no `before`/`after`
  * of its own to check it against.
+ *
+ * Two things the wording has to do, both confirmed live against the wordings they replace (see `buildAnswerRequest`
+ * for the same two on step 4). It says where the candidate came from, because a row like "Type: Artificial
+ * intelligence model" names no subject of its own: read as a standalone sentence it is about nothing, and the check
+ * turned it down for "just mentioning the subject" when it does not even do that. And it asks whether the candidate is
+ * *the thing the question asks for* rather than whether every detail of the question appears in it — the detail form
+ * scored a row on how much of the question's wording it repeated, so for "what is jev ai typesafe" it preferred
+ * "Developer: TypeSafe AI" (0.65, and accepted) over the right row (0.45, and turned down). Asking what the question
+ * asks for reverses that (0.44 against 0.69) and also raises every candidate that was already passing. The near
+ * misses the detail clause existed to catch — the right kind of fact for the wrong year, model or place — are still
+ * caught by "a different fact about the same subject, or a fact about something else", and one that the detail clause
+ * let through (the city-proper population for a question about the metropolitan area, 0.66) is now caught too.
  */
 export function buildCheckRequest(question, title, partLabel, candidate, about) {
   const state = { question, article: title, part: partLabel, sentence: candidate.text };
@@ -864,7 +876,7 @@ export function buildCheckRequest(question, title, partLabel, candidate, about) 
     questions: {
       answers: {
         type: 'noul',
-        instructions: `Does \`sentence\` state the answer to \`question\` for exactly what the question specifies, with every detail in it (such as the model, engine, year or place) matching, rather than for something similar or something else, or just mentioning the subject? (\`before\` and \`after\`, when given, are the text around it.${about ? ' `about` is a short excerpt describing the subject, for context.' : ''})`,
+        instructions: `\`sentence\` is from the part "${partLabel}" of the article "${title}", so its subject is that article's subject. Read this way, is \`sentence\` the thing "${question}" asks for, rather than a different fact about the same subject, or a fact about something else? (\`before\` and \`after\`, when given, are the text around it.${about ? ' `about` is a short excerpt describing the subject, for context.' : ''})`,
       },
     },
   };

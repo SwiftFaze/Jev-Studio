@@ -606,9 +606,13 @@ test('the refine request offers the pieces of the row, with a way out, and maps 
   assert.equal(readChoice({ probabilities: { r0: 0.1, r1: 0.85, none: 0.05 } }, pieces, 'r').ranked[0].item, 'Top speed: 187 km/h');
 });
 
-test('the final check asks that every detail of the question matches', () => {
-  const check = buildCheckRequest('q', 'Paris', 'Infobox', { text: 'S', before: '', after: '' });
-  assert.match(check.questions.answers.instructions, /exactly what the question specifies/);
+test('the final check says where the candidate came from, and asks whether it is what the question asks for', () => {
+  const check = buildCheckRequest('how big is Paris?', 'Paris', 'Infobox', { text: 'S', before: '', after: '' });
+  // The part and article, so a row that names no subject of its own is read as being about the article's subject.
+  assert.match(check.questions.answers.instructions, /from the part "Infobox" of the article "Paris"/);
+  // The question written out, not left as `question`, and asked as "is this the thing it asks for".
+  assert.match(check.questions.answers.instructions, /is `sentence` the thing "how big is Paris\?" asks for/);
+  assert.match(check.questions.answers.instructions, /a different fact about the same subject, or a fact about something else/);
 });
 
 test('a saved answer keeps the refined piece, and the refine step is a known kind of step', () => {
