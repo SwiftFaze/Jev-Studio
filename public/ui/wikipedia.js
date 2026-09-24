@@ -229,7 +229,11 @@ export function initWikipedia() {
     const found = !running && progress?.status === 'found';
     saveBtn.disabled = !found || isSaved(progress.answer);
     saveBtn.textContent = found && isSaved(progress.answer) ? 'Saved' : 'Save answer';
-    againBtn.hidden = pathBtn.hidden = !finished();
+    // A false premise or an unanswerable question stopped before any article or search term was tried, so "a different
+    // path" (which only avoids those) would not change anything.
+    const gated = progress?.status === 'false-premise' || progress?.status === 'unanswerable';
+    againBtn.hidden = !finished();
+    pathBtn.hidden = !finished() || gated;
     againBtn.disabled = pathBtn.disabled = blank;
     stopBtn.hidden = !running;
   }
@@ -240,6 +244,8 @@ export function initWikipedia() {
     if (p.status === 'running') return `Asking Jev: request ${p.requests}${limit == null ? '' : ` of ${limit}`}`;
     if (p.status === 'found') return `Found, with ${asked} to Jev.`;
     if (p.status === 'stopped') return `Stopped after ${asked} to Jev.`;
+    if (p.status === 'false-premise') return `False premise, with ${asked} to Jev.`;
+    if (p.status === 'unanswerable') return `Unanswerable, with ${asked} to Jev.`;
     return `Not found, after ${asked} to Jev.`;
   };
 
@@ -329,11 +335,21 @@ export function initWikipedia() {
     );
   }
 
+  // What each terminal non-"found" status is headed with, and the hint under it: a false premise or an unanswerable
+  // question stopped before any search was made, so "try a different path" (which avoids articles and search terms
+  // already tried) would make no difference, and is left out for those two.
+  const GATED_HEADINGS = {
+    'not-found': ['Not found. ', 'The steps below show which one went wrong. Try again, try a different path, or change the settings and ask again.'],
+    'false-premise': ['False premise. ', 'The steps below show what Jev thought was false. Try rephrasing the question if this was not what you meant.'],
+    unanswerable: ['Unanswerable. ', "The steps below show what Jev saw. Try rephrasing the question if it wasn't meant to be read this way."],
+  };
+
   function notFoundCard(p) {
+    const [heading, hint] = GATED_HEADINGS[p.status] ?? GATED_HEADINGS['not-found'];
     return h(
       'div',
       { class: 'wiki-notfound' },
-      h('p', {}, h('strong', {}, 'Not found. '), p.reason),
+      h('p', {}, h('strong', {}, heading), p.reason),
       p.best
         ? [
             h('p', { class: 'small muted' }, `The closest text Jev saw, which it is only ${pct(p.best.checked)} sure answers the question (it needs ${pct(slice.settings.accept / 100)}):`),
@@ -341,7 +357,7 @@ export function initWikipedia() {
             h('p', { class: 'wiki-source small' }, 'From ', sourceLink(p.best)),
           ]
         : null,
-      h('p', { class: 'hint' }, 'The steps below show which one went wrong. Try again, try a different path, or change the settings and ask again.'),
+      h('p', { class: 'hint' }, hint),
     );
   }
 
@@ -353,7 +369,7 @@ export function initWikipedia() {
     else if (p) {
       if (p.quick) parts.push(quickCard(p));
       if (p.status === 'running') parts.push(h('p', { class: 'muted small' }, 'Looking…'));
-      if (p.status === 'not-found') parts.push(notFoundCard(p));
+      if (p.status === 'not-found' || p.status === 'false-premise' || p.status === 'unanswerable') parts.push(notFoundCard(p));
       if (p.status === 'stopped') parts.push(h('p', { class: 'notice' }, 'Stopped. The steps below show how far it got.'));
     }
     if (parts.length === 0) parts.push(h('p', { class: 'muted' }, 'Ask a question and the answer appears here, with the page it came from.'));
