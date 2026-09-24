@@ -11,9 +11,18 @@ export const MAX_CHOICES = 250; // the API allows 255 options in a Choice; this 
 export const MAX_CHUNKS = 4; // a part is cut into at most this many Choices in one request (1,000 candidates)
 export const MAX_TERMS = 10;
 export const MAX_RESULTS = 12; // articles Jev picks from at step 2
+export const ABOUT_CHARS = 400; // the Lead excerpt given as context for a part with none of its own (an infobox or table row)
 
 const clip = (text, max = MAX_OPTION_CHARS) => (text.length > max ? `${text.slice(0, max - 1).trimEnd()}…` : text);
 const squash = (text) => text.replace(/\s+/g, ' ').trim();
+
+/**
+ * A short excerpt of the article's Lead (its first sentences, up to `ABOUT_CHARS`), to ground steps 4 and 5 in what
+ * the subject actually is. An infobox row or a table row has no `before`/`after` of its own (a bare "Developer:
+ * TypeSafe AI" has no neighbours to give it context, unlike a sentence or a row of a table with column headers), so
+ * without this, ranking or checking among them happens with nothing but the bare label and value to go on.
+ */
+export const leadExcerpt = (sentences) => (sentences?.length ? clip(sentences.join(' '), ABOUT_CHARS) : null);
 
 /* ---------- links ---------- */
 
@@ -795,32 +804,40 @@ const lowerFirst = (s) => s.charAt(0).toLowerCase() + s.slice(1);
  * for. Left out (or the catch-all "Something else") when step 3 wasn't sure, rather than guessing. Returns the
  * request and the chunks.
  */
-export function buildAnswerRequest(question, title, partLabel, candidates, meaning) {
+export function buildAnswerRequest(question, title, partLabel, candidates, meaning, about) {
   const chunks = [];
   for (let i = 0; i < candidates.length && chunks.length < MAX_CHUNKS; i += MAX_CHOICES) chunks.push(candidates.slice(i, i + MAX_CHOICES));
   const questions = {};
   const asks = meaning ? `states the answer to \`question\`, which is asking for ${lowerFirst(meaning)}` : 'states the answer to `question`';
+  const aboutNote = about ? ' (`about` is a short excerpt describing the subject, for context.)' : '';
+  const state = { question, article: title, part: partLabel };
+  if (about) state.about = about;
   chunks.forEach((chunk, c) => {
     questions[`answer${c}`] = {
       type: 'choice',
-      instructions: `Which of these sentences, from the part \`part\` of the article \`article\`, ${asks}?`,
+      instructions: `Which of these sentences, from the part \`part\` of the article \`article\`, ${asks}?${aboutNote}`,
       criteria: { ...indexKeys('c', chunk, (cand) => cand.text), none: 'None of these states the answer' },
     };
   });
-  return { request: { state: { question, article: title, part: partLabel }, questions }, chunks };
+  return { request: { state, questions }, chunks };
 }
 
-/** Step 5: a Yes / No on the chosen candidate, with the sentence either side so it is read in context. */
-export function buildCheckRequest(question, title, partLabel, candidate) {
+/**
+ * Step 5: a Yes / No on the chosen candidate, with the sentence either side so it is read in context. `about` (see
+ * `leadExcerpt`) is the same grounding step 4 got, for a candidate — an infobox or table row — with no `before`/`after`
+ * of its own to check it against.
+ */
+export function buildCheckRequest(question, title, partLabel, candidate, about) {
   const state = { question, article: title, part: partLabel, sentence: candidate.text };
   if (candidate.before) state.before = candidate.before;
   if (candidate.after) state.after = candidate.after;
+  if (about) state.about = about;
   return {
     state,
     questions: {
       answers: {
         type: 'noul',
-        instructions: 'Does `sentence` state the answer to `question` for exactly what the question specifies, with every detail in it (such as the model, engine, year or place) matching, rather than for something similar or something else, or just mentioning the subject? (`before` and `after`, when given, are the text around it.)',
+        instructions: `Does \`sentence\` state the answer to \`question\` for exactly what the question specifies, with every detail in it (such as the model, engine, year or place) matching, rather than for something similar or something else, or just mentioning the subject? (\`before\` and \`after\`, when given, are the text around it.${about ? ' `about` is a short excerpt describing the subject, for context.' : ''})`,
       },
     },
   };

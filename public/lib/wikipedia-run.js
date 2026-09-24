@@ -1,7 +1,7 @@
 import {
   articleParts, articleUrl, attributeQuestion, buildAnswerRequest, buildArticleRequest, buildCheckRequest, buildClassifyRequest, buildCompareRequest, buildFilterRequest, buildPartRequest,
-  buildRefineRequest, buildTermRequest, mergeResults, meaningOptions, parseComparison, parseNegation, partCandidates, QUESTION_TYPE_LABELS, readAnswerChunks, readChoice, readClassify, readFilter,
-  readMeaning, readYesNo, resolvePronoun, searchTerms, splitMultiPart,
+  buildRefineRequest, buildTermRequest, leadExcerpt, mergeResults, meaningOptions, parseComparison, parseNegation, partCandidates, QUESTION_TYPE_LABELS, readAnswerChunks, readChoice, readClassify,
+  readFilter, readMeaning, readYesNo, resolvePronoun, searchTerms, splitMultiPart,
   MAX_CHOICES,
 } from './wikipedia.js';
 
@@ -103,6 +103,9 @@ const candidateName = (text) => {
   const words = head.split(/\s+/).slice(0, 6).join(' ');
   return (words || text).slice(0, 60).trim();
 };
+
+/** The Lead excerpt for `part`, unless `part` is the Lead itself (then there is nothing to add: the candidate already is it). */
+const aboutFor = (data, part) => (part.label === 'Lead' ? null : leadExcerpt(data.sections?.find((s) => s.path === 'Lead')?.sentences));
 
 /**
  * Find a quote on Wikipedia that answers `question`, step by step, and say how sure Jev was at each one.
@@ -245,7 +248,7 @@ export async function findAnswer(question, { search, article, run, signal, onPro
         continue;
       }
 
-      const { request, chunks } = buildAnswerRequest(question, data.title, part.label, candidates, topMeaning);
+      const { request, chunks } = buildAnswerRequest(question, data.title, part.label, candidates, topMeaning, aboutFor(data, part));
       const reply = await ask(request);
       const ranked = readAnswerChunks(reply, chunks);
       const top = ranked[0];
@@ -280,7 +283,7 @@ export async function findAnswer(question, { search, article, run, signal, onPro
 
   /** The final check on one sentence or row, and, if it passes and is a row, the refinement to its one piece. True when it is the answer. */
   async function judge(item, p, part, data) {
-    const checkRequest = buildCheckRequest(question, data.title, part.label, item);
+    const checkRequest = buildCheckRequest(question, data.title, part.label, item, aboutFor(data, part));
     const checked = readYesNo((await ask(checkRequest)).answers);
     add({
       id: 'check',
@@ -288,7 +291,7 @@ export async function findAnswer(question, { search, article, run, signal, onPro
       label: checked >= at.found ? 'answers the question' : 'does not state the answer',
       p: checked,
       instructions: checkRequest.questions.answers.instructions,
-      state: { question, article: data.title, part: part.label, sentence: item.text },
+      state: checkRequest.state, // the state really sent, `before`/`after`/`about` included when given, not just rebuilt from the basics
     });
 
     const found = {

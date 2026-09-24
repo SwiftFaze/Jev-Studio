@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { validateRequest } from '../src/validate.js';
 import {
-  articleParts, articleUrl, buildAnswerRequest, buildArticleRequest, buildCheckRequest, buildPartRequest, buildRefineRequest, buildTermRequest, rowPieces, decodeEntities, MAX_CHOICES,
+  articleParts, articleUrl, buildAnswerRequest, buildArticleRequest, buildCheckRequest, buildPartRequest, buildRefineRequest, buildTermRequest, rowPieces, decodeEntities, leadExcerpt, ABOUT_CHARS, MAX_CHOICES,
   addSavedAnswer, cleanSavedAnswers, cleanStats, cleanTrail, mergeResults, mergeTables, parseTables, meaningOptions, parseInfobox, partCandidates, readAnswerChunks, readChoice, readMeaning, readYesNo, savedAnswer, searchTerms, splitSections, splitSentences, stripSnippet,
 } from '../public/lib/wikipedia.js';
 
@@ -297,6 +297,29 @@ test('the check request carries the sentence and its neighbours, and leaves out 
   assert.deepEqual(both.state, { question: 'q', article: 'Paris', part: 'Lead', sentence: 'S', before: 'B', after: 'A' });
   const bare = buildCheckRequest('q', 'Paris', 'Infobox', { text: 'S', before: '', after: '' });
   assert.deepEqual(Object.keys(bare.state), ['question', 'article', 'part', 'sentence']);
+});
+
+test('leadExcerpt joins sentences up to ABOUT_CHARS, and is null for nothing to join', () => {
+  assert.equal(leadExcerpt(undefined), null);
+  assert.equal(leadExcerpt([]), null);
+  assert.equal(leadExcerpt(['One.', 'Two.']), 'One. Two.');
+  const long = leadExcerpt(Array.from({ length: 100 }, () => 'A sentence of a certain length.'));
+  assert.equal(long.length, ABOUT_CHARS);
+  assert.ok(long.endsWith('…'));
+});
+
+test('an infobox or table row, with no before/after of its own, gets the Lead as `about` instead; the Lead itself does not repeat itself', () => {
+  const about = 'Paris is the capital of France.';
+  const withAbout = buildAnswerRequest('q', 'Paris', 'Infobox', [{ text: 'Area: 105 km2' }], null, about);
+  assert.equal(withAbout.request.state.about, about);
+  assert.match(withAbout.request.questions.answer0.instructions, /`about` is a short excerpt/);
+  const withoutAbout = buildAnswerRequest('q', 'Paris', 'Lead', [{ text: 'Paris is a city.' }]);
+  assert.equal('about' in withoutAbout.request.state, false);
+  assert.doesNotMatch(withoutAbout.request.questions.answer0.instructions, /about/);
+
+  const check = buildCheckRequest('q', 'Paris', 'Infobox', { text: 'Area: 105 km2', before: '', after: '' }, about);
+  assert.equal(check.state.about, about);
+  assert.match(check.questions.answers.instructions, /`about` is a short excerpt/);
 });
 
 /* ---------- reading answers ---------- */

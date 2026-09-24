@@ -132,9 +132,13 @@ test('the question asked at each step is the one Jev is meant to see', async () 
   assert.equal(Object.keys(article.questions).filter((id) => /^s\d+$/.test(id)).length, 3, 'a Yes / No for each snippet, in the same request');
   assert.deepEqual(part.state, { question: QUESTION, article: 'Paris' });
   assert.ok('meaning' in part.questions, 'what the question means is asked in the same request as the part');
-  assert.deepEqual(answer.state, { question: QUESTION, article: 'Paris', part: 'Infobox' });
+  assert.equal(answer.state.question, QUESTION);
+  assert.equal(answer.state.article, 'Paris');
+  assert.equal(answer.state.part, 'Infobox');
+  assert.ok(answer.state.about?.length > 0, 'the Infobox has no context of its own, so a Lead excerpt grounds the choice');
   assert.equal(check.state.part, 'Infobox');
   assert.match(check.state.sentence, /^Area: /);
+  assert.ok(check.state.about?.length > 0, 'the same grounding for the final check');
 });
 
 test('the runner-up search term is searched too when Jev is under 60% sure, and the results are merged without repeats', async () => {
@@ -599,7 +603,7 @@ test('a step Jev was asked carries what the trail needs to draw the same card as
   assert.equal(answer.options.at(-1).key, 'none');
   assert.match(check.instructions, /state the answer to/);
   assert.match(check.state.sentence, /^Area: /);
-  assert.deepEqual(Object.keys(check.state).sort(), ['article', 'part', 'question', 'sentence']);
+  assert.deepEqual(Object.keys(check.state).sort(), ['about', 'article', 'part', 'question', 'sentence']);
 });
 
 test('a "Not found" says why it stopped: options Jev rated under the floor, or a limit, and which setting to change', async () => {
