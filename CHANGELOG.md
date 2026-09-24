@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0](https://github.com/SwiftFaze/Jev-Studio/compare/v0.5.0...v0.6.0) (2026-09-24)
+
+
+### Features
+
+* Wikipedia answer accuracy fixes, and a page that runs a Batch-saved set ([#16](https://github.com/SwiftFaze/Jev-Studio/issues/16)) ([0f78a83](https://github.com/SwiftFaze/Jev-Studio/commit/0f78a8326df1afd8ac9fcab2a6162603ea0aa6b0))
+
 ## [0.5.0](https://github.com/SwiftFaze/Jev-Studio/compare/v0.4.0...v0.5.0) (2026-09-21)
 
 
