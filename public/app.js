@@ -57,6 +57,13 @@ function trackBars() {
 /* ---------- pages ---------- */
 
 function setMode(mode) {
+  // A set saved from Batch runs each pasted line as its own item, against the same questions — setpage.js can only
+  // send the whole pasted text as one request, so it can never do that. Opening one loads it on Batch instead
+  // (the same as "Edit in Batch"), which is the only page that actually runs one row at a time.
+  if (isSetMode(mode)) {
+    const set = app.sets.find((s) => s.id === setIdOf(mode));
+    if (set && editPageOf(set) === 'batch') return editSet(set.id);
+  }
   const known = isSetMode(mode)
     ? app.sets.some((s) => s.id === setIdOf(mode))
     : isSteamSavedMode(mode)
