@@ -96,7 +96,18 @@ const slimStep = (step, number) =>
  * sure it was, and opening it shows the full card (a Choice card or a Yes / No card, the same as on the Single page). A step
  * that took no request of its own, or was skipped, is one line. `open` and `onToggle` let the page remember which are open.
  */
-function stepView(step, { chosenText, index, open, onToggle }) {
+/**
+ * The step, as the request that was really sent to Jev — so it can be reopened and experimented with on the Single
+ * page (a different state, different wording, an option added or removed). Only for a step with its own card (see
+ * `stepView`): a slim one-line step (a gate, a batched negation check, a reused "next best" retry, …) isn't one
+ * question and has nothing of its own to reopen.
+ */
+function stepRequest(step) {
+  if (step.id === 'check') return { state: step.state, questions: { answers: { type: 'noul', instructions: step.instructions } } };
+  return { state: step.state, questions: { [step.id]: { type: 'choice', instructions: step.instructions, criteria: Object.fromEntries(step.options.map((o) => [o.key, o.label])) } } };
+}
+
+function stepView(step, { chosenText, index, open, onToggle, openInSingle }) {
   const number = STEP_NUMBERS[step.id];
   const asked = Boolean(step.instructions) && !step.reused && !step.skipped;
   if (!asked) return h('div', { class: 'wiki-step' }, slimStep(step, number));
@@ -109,12 +120,28 @@ function stepView(step, { chosenText, index, open, onToggle }) {
   const chosen = step.id === 'answer' && chosenText && step.label === chosenText;
   const meaning = step.meaning?.options?.length ? choiceCard('What it asks for', step.meaning) : null;
   const label = QUOTED.has(step.id) ? `“${step.label}”` : step.label;
+  const openBtn = openInSingle
+    ? h(
+        'div',
+        { class: 'wiki-fold-tools' },
+        h(
+          'button',
+          {
+            type: 'button',
+            class: 'btn btn-ghost btn-sm',
+            title: 'Put this exact question and state on the Single page, to experiment with it',
+            onclick: () => openInSingle({ request: stepRequest(step) }),
+          },
+          'Open in Single',
+        ),
+      )
+    : null;
 
   const fold = h(
     'details',
     { class: `wiki-fold${chosen ? ' is-chosen' : ''}` },
     h('summary', {}, h('span', { class: 'wiki-fold-title' }, `${number}. ${step.id === 'check' ? 'Check' : step.title}`), h('span', { class: 'wiki-fold-label' }, label), h('span', { class: 'wiki-fold-pct' }, pct(step.p))),
-    h('div', { class: 'wiki-fold-body' }, card, noteLine(step.note), meaning),
+    h('div', { class: 'wiki-fold-body' }, card, noteLine(step.note), meaning, openBtn),
   );
   fold.open = open.has(index);
   fold.addEventListener('toggle', () => onToggle(index, fold.open));
@@ -125,9 +152,11 @@ function stepView(step, { chosenText, index, open, onToggle }) {
  * The trail, step by step. `chosenText` is the sentence that became the answer, to mark it. While a run is going, `pending`
  * is a line saying what it is waiting for. `open` is the set of step numbers (their place in the trail) that are unfolded,
  * and `onToggle(index, open)` is told when one is folded or unfolded, so a page that draws the trail again as it grows can keep them.
+ * `openInSingle(entry)`, when given, adds an "Open in Single" button to every step with its own card, calling back with
+ * `{ request }` (the same shape a saved run has) so the page can put it on Single, the way "Restore" in History does.
  */
-export function stepsView(trail, { chosenText = '', pending = '', open = new Set(), onToggle = () => {} } = {}) {
-  const steps = trail.map((step, index) => stepView(step, { chosenText, index, open, onToggle }));
+export function stepsView(trail, { chosenText = '', pending = '', open = new Set(), onToggle = () => {}, openInSingle } = {}) {
+  const steps = trail.map((step, index) => stepView(step, { chosenText, index, open, onToggle, openInSingle }));
   if (pending) steps.push(h('div', { class: 'wiki-step' }, h('div', { class: 'wiki-slim is-pending' }, h('span', { class: 'muted small' }, pending))));
   const root = h('div', { class: 'wiki-steps' });
   const setAll = (value) => {

@@ -43,7 +43,7 @@ export function renderWikipediaSavedMenu() {
  * The page a saved answer is shown on, the same for every one: the question on top, then the answer, then how Jev got there.
  * The bottom bar has Ask again (back to the Wikipedia answer page with the question in the box) and Remove.
  */
-export function createWikipediaSavedPage({ onAskAgain, onRemoved }) {
+export function createWikipediaSavedPage({ onAskAgain, onRemoved, openInSingle }) {
   let currentId = null;
   const current = () => app.wikipedia.saved.find((a) => a.id === currentId) ?? null;
 
@@ -75,7 +75,7 @@ export function createWikipediaSavedPage({ onAskAgain, onRemoved }) {
     $('#wikipediasaved-answer').replaceChildren(answerBlock(a));
     $('#wikipediasaved-trail').replaceChildren(
       statsView(a.stats, { checked: a.checked }),
-      a.trail.length > 0 ? stepsView(a.trail, { chosenText: a.text }) : h('p', { class: 'muted' }, 'The steps were not kept with this answer.'),
+      a.trail.length > 0 ? stepsView(a.trail, { chosenText: a.text, openInSingle }) : h('p', { class: 'muted' }, 'The steps were not kept with this answer.'),
     );
   }
 

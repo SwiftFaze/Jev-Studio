@@ -284,6 +284,7 @@ wikipediaSavedPage = createWikipediaSavedPage({
     bulk.wikipedia.load({ question });
   },
   onRemoved: () => setMode('wikipedia'),
+  openInSingle: restoreRun,
 });
 renderWikipediaSavedMenu();
 document.querySelector('#wikipedia-toggle').addEventListener('click', toggleWikipediaSavedMenu);
@@ -291,7 +292,7 @@ initBuilder();
 bulk.batch = initBulk('batch', { openCsv: openCsvDialog });
 bulk.rank = initBulk('rank');
 bulk.steam = initSteam();
-bulk.wikipedia = initWikipedia();
+bulk.wikipedia = initWikipedia({ openInSingle: restoreRun });
 initCompare();
 initSidebar({ onNavigate: setMode });
 initSaveSet({ onSetsChanged });

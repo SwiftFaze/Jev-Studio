@@ -36,7 +36,7 @@ const describeSettings = (s) =>
  * Everything shown from Wikipedia is text, drawn as text: the server passes on no HTML, and nothing here builds any.
  * Links are made only from an article title, so they always lead to en.wikipedia.org.
  */
-export function initWikipedia() {
+export function initWikipedia({ openInSingle } = {}) {
   const slice = app.wikipedia;
   const $ = (id) => document.querySelector(`#wikipedia-${id}`);
 
@@ -383,7 +383,10 @@ export function initWikipedia() {
     }
     const stats = { requests: progress.requests, tokens: progress.tokens, ms: progress.ms, articles: progress.read.length, terms: progress.searched };
     const pending = running ? (progress.requests ? `Asking Jev (request ${progress.requests}${slice.settings.requests == null ? '' : ` of ${slice.settings.requests}`})…` : 'Starting…') : '';
-    $('trail').replaceChildren(statsView(stats, { checked: progress.answer?.checked ?? null, requestLimit: slice.settings.requests }), stepsView(progress.trail, { chosenText: progress.answer?.text ?? '', pending, open: openSteps, onToggle: (index, open) => (open ? openSteps.add(index) : openSteps.delete(index)) }));
+    $('trail').replaceChildren(
+      statsView(stats, { checked: progress.answer?.checked ?? null, requestLimit: slice.settings.requests }),
+      stepsView(progress.trail, { chosenText: progress.answer?.text ?? '', pending, open: openSteps, onToggle: (index, open) => (open ? openSteps.add(index) : openSteps.delete(index)), openInSingle }),
+    );
   }
 
   function render() {
