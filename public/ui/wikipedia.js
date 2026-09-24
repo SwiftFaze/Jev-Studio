@@ -5,6 +5,7 @@ import { addSavedAnswer, savedAnswer } from '../lib/wikipedia.js';
 import { pct } from '../results.js';
 import { postRun, postWikipediaArticle, postWikipediaSearch } from './api.js';
 import { flash } from './save-set.js';
+import { downloadText, fileStamp } from './download.js';
 import { revealPane } from './reveal.js';
 import { renderWikipediaSavedMenu } from './wikipedia-saved.js';
 import { answerBlock, sourceLink, statsView, stepsView } from './wikipedia-view.js';
@@ -214,11 +215,23 @@ export function initWikipedia({ openInSingle } = {}) {
   /* ---------- the bottom bar ---------- */
   const runBtn = h('button', { type: 'button', id: 'wikipedia-run', class: 'btn btn-primary', onclick: () => start() }, 'Find answer');
   const saveBtn = h('button', { type: 'button', id: 'wikipedia-save', class: 'btn', title: 'Keep this answer, with the steps Jev took, under Wikipedia answer in the menu', onclick: () => saveAnswer() }, 'Save answer');
+  const exportBtn = h(
+    'button',
+    { type: 'button', id: 'wikipedia-export', class: 'btn btn-ghost', title: 'Download every request sent to Jev and the response it gave, in order, as JSON', onclick: () => exportLog() },
+    'Export requests & responses',
+  );
   const againBtn = h('button', { type: 'button', id: 'wikipedia-again', class: 'btn', hidden: true, title: 'Ask again from the start, with the settings as they are now', onclick: () => start() }, 'Try again');
   const pathBtn = h('button', { type: 'button', id: 'wikipedia-path', class: 'btn', hidden: true, title: 'Ask again, but keep away from the articles and search terms already used', onclick: () => start({ differentPath: true }) }, 'Try a different path');
   const stopBtn = h('button', { type: 'button', id: 'wikipedia-stop', class: 'btn', hidden: true, onclick: () => controller?.abort() }, 'Stop');
   const statusEl = h('span', { id: 'wikipedia-status', class: 'runbar-status', role: 'status', hidden: true });
-  document.querySelector('#runbar-wikipedia').replaceChildren(runBtn, saveBtn, againBtn, pathBtn, stopBtn, statusEl);
+  document.querySelector('#runbar-wikipedia').replaceChildren(runBtn, saveBtn, exportBtn, againBtn, pathBtn, stopBtn, statusEl);
+
+  /** Every request this run sent to Jev, and the response it got back, exactly as they were — for debugging outside the app. */
+  function exportLog() {
+    if (!progress?.log?.length) return;
+    const payload = { question: slice.question.trim(), status: progress.status, requests: progress.requests, tokens: progress.tokens, ms: progress.ms, log: progress.log };
+    downloadText(`jev-wikipedia-log-${fileStamp()}.json`, JSON.stringify(payload, null, 2), 'application/json');
+  }
 
   const isSaved = (answer) => slice.saved.some((s) => s.question === slice.question.trim() && s.url === answer.url && s.text === answer.text);
   const finished = () => !running && (progress != null || failure !== '');
@@ -229,6 +242,7 @@ export function initWikipedia({ openInSingle } = {}) {
     const found = !running && progress?.status === 'found';
     saveBtn.disabled = !found || isSaved(progress.answer);
     saveBtn.textContent = found && isSaved(progress.answer) ? 'Saved' : 'Save answer';
+    exportBtn.disabled = !progress?.log?.length;
     // A false premise or an unanswerable question stopped before any article or search term was tried, so "a different
     // path" (which only avoids those) would not change anything.
     const gated = progress?.status === 'false-premise' || progress?.status === 'unanswerable';

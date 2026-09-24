@@ -144,7 +144,9 @@ const aboutFor = (data, part) => (part.label === 'Lead' ? null : leadExcerpt(dat
  *  - `trail`: one entry per step taken: `{ id, title, label, p, note, skipped, reused, others, none, meaning }`, and for a step
  *    Jev was asked, what it was asked (`instructions`, `state`) and what it thought (`chosen`, `options`, `confidence`);
  *    a `subquestion` step also has `sub`, that sub-question's own trail;
- *  - `requests`, `tokens`, `ms`: what the run has cost so far; `searched` and `read`: the search terms used and articles opened.
+ *  - `requests`, `tokens`, `ms`: what the run has cost so far; `searched` and `read`: the search terms used and articles opened;
+ *  - `log`: every request sent to Jev and the response it gave, `{ request, response }`, in order, including a sub-question's own
+ *    (Multi-Part and Comparison fold their sub-runs' logs into this one) — the whole run's actual traffic, for exporting or debugging.
  * A failure from `search`, `article` or `run` is thrown, with the snapshot so far on `err.progress`.
  */
 export async function findAnswer(question, { search, article, run, signal, onProgress = () => {}, limits = {}, thresholds = {}, quick = true, refine = true, classify = true, avoid = {} } = {}) {
@@ -152,11 +154,11 @@ export async function findAnswer(question, { search, article, run, signal, onPro
   for (const key of Object.keys(limits)) if (limits[key] !== undefined) max[key] = limits[key] ?? Infinity;
   const at = { ...THRESHOLDS, ...thresholds };
   const started = performance.now();
-  const state = { status: 'running', reason: '', requests: 0, tokens: 0, ms: 0, trail: [], quick: null, best: null, answer: null, searched: [], read: [] };
+  const state = { status: 'running', reason: '', requests: 0, tokens: 0, ms: 0, trail: [], quick: null, best: null, answer: null, searched: [], read: [], log: [] };
   const tried = new Set((avoid.articles ?? []).map(lower)); // articles already opened, on this run or an earlier one
   // Why it may have stopped short, for a "Not found": options left out for being under the floor, or for a limit.
   const left = { floor: false, limit: false };
-  const snapshot = () => ({ ...state, ms: Math.round(performance.now() - started), trail: state.trail.map((entry) => ({ ...entry })), searched: [...state.searched], read: [...state.read] });
+  const snapshot = () => ({ ...state, ms: Math.round(performance.now() - started), trail: state.trail.map((entry) => ({ ...entry })), searched: [...state.searched], read: [...state.read], log: [...state.log] });
   const emit = () => onProgress(snapshot());
   const add = (entry) => {
     state.trail.push(entry);
@@ -174,6 +176,7 @@ export async function findAnswer(question, { search, article, run, signal, onPro
     const reply = await run(request, signal);
     guard();
     state.tokens += (reply?.usage?.input_tokens ?? 0) + (reply?.usage?.output_tokens ?? 0);
+    state.log.push({ request, response: reply }); // the exact pair sent and received, for exporting the whole run
     return reply?.answers ?? {};
   };
 
@@ -392,6 +395,7 @@ export async function findAnswer(question, { search, article, run, signal, onPro
     const sub = await findAnswer(subQuestion, { search, article, run, signal, quick: false, refine, classify: false, limits: { ...max, requests: budget }, thresholds: at, avoid });
     state.requests += sub.requests;
     state.tokens += sub.tokens;
+    state.log.push(...sub.log);
     if (sub.status === 'stopped') throw new Stopped();
     return sub;
   }

@@ -107,6 +107,17 @@ test('the best case takes five requests to Jev: term, article, part, answer, che
   assert.equal(result.answer.checked, 0.93);
 });
 
+test('log keeps every request sent to Jev and the response it gave, in order, the exact pair — for exporting the run', async () => {
+  const jev = fakeJev();
+  const result = await findAnswer(QUESTION, { ...fakeWorld(), run: jev.run });
+  assert.equal(result.log.length, 5);
+  assert.deepEqual(result.log.map((entry) => Object.keys(entry.request.questions)[0]), ['term', 'article', 'part', 'answer0', 'answers']);
+  for (const entry of result.log) {
+    assert.equal(entry.request, jev.requests[result.log.indexOf(entry)], 'the exact request object, not a copy');
+    assert.ok(entry.response.answers, 'the exact response, answers and usage included');
+  }
+});
+
 test('the trail says what Jev chose at each step and how sure it was, with the runners-up and what the question means', async () => {
   const jev = fakeJev();
   const { trail } = await findAnswer(QUESTION, { ...fakeWorld(), run: jev.run });
